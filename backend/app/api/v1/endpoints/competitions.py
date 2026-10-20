@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
 from app.db.base import get_db
-from app.models.models import Competition, User
+from app.models.models import Competition, Standing, User
 from app.schemas.competition import CompetitionCreate, CompetitionUpdate, CompetitionResponse, FREE_TIER_LIMIT
 from app.services.scoring import get_default_scoring
 
@@ -103,5 +103,7 @@ def delete_competition(
     if not competition:
         raise HTTPException(status_code=404, detail="Competition not found")
 
+    # Standings have no ORM relationship to cascade through, so clear them first
+    db.query(Standing).filter(Standing.competition_id == competition_id).delete()
     db.delete(competition)
     db.commit()

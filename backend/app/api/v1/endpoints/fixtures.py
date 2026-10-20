@@ -8,14 +8,16 @@ from app.core.security import get_current_user
 from app.db.base import get_db
 from app.models.models import (
     Competition, CompetitionFormat, CompetitionStatus,
-    Fixture, FixtureStatus, Group, Standing, Team, User,
+    Fixture, FixtureStatus, Group, Result, Standing, Team, User,
 )
 from app.schemas.fixture import (
     AdvanceToKnockoutRequest, FixtureResponse, FixtureSchedule, ManualFixtureCreate,
 )
 from app.services.fixture_generator import (
-    generate_round_robin, generate_knockout_bracket, get_knockout_round_label,
+    arrange_first_round, generate_round_robin, generate_knockout_bracket, num_byes,
 )
+from app.services.knockout import create_first_round
+from app.services.standings import ranked_table
 
 router = APIRouter()
 
@@ -52,22 +54,9 @@ def _build_fixtures(db: Session, competition: Competition, teams: list) -> list:
                 fixtures.append(f)
 
     elif competition.format == CompetitionFormat.KNOCKOUT:
-        rounds = generate_knockout_bracket(team_ids)
-        total_teams = len(team_ids)
-        for round_number, matches in enumerate(rounds, start=1):
-            label = get_knockout_round_label(total_teams // (2 ** (round_number - 1)))
-            for home_id, away_id in matches:
-                if home_id is None and away_id is None:
-                    continue  # TBD — created dynamically after each round
-                f = Fixture(
-                    competition_id=competition.id,
-                    home_team_id=home_id,
-                    away_team_id=away_id,
-                    round_number=round_number,
-                    knockout_round=label,
-                )
-                db.add(f)
-                fixtures.append(f)
+        # Only round 1 is created; later rounds are added by advance_knockout_round
+        entries = generate_knockout_bracket(team_ids)
+        fixtures.extend(create_first_round(db, competition.id, entries, round_number=1))
 
     elif competition.format == CompetitionFormat.GROUP_KNOCKOUT:
         if not competition.num_groups or competition.num_groups < 2:
@@ -145,21 +134,19 @@ def regenerate_fixtures(
     if competition.status == CompetitionStatus.COMPLETED:
         raise HTTPException(status_code=400, detail="Cannot regenerate fixtures for a completed competition")
 
-    # For GROUP_KNOCKOUT: clear team group assignments before deleting groups
-    if competition.format == CompetitionFormat.GROUP_KNOCKOUT:
-        db.query(Team).filter(Team.competition_id == competition_id).update({"group_id": None})
-        db.flush()
-        db.query(Group).filter(Group.competition_id == competition_id).delete()
-        db.flush()
-
-    db.query(Standing).filter(Standing.competition_id == competition_id).delete()
-    db.query(Fixture).filter(Fixture.competition_id == competition_id).delete()
-    competition.status = CompetitionStatus.DRAFT
-    db.commit()
-
     teams = db.query(Team).filter(Team.competition_id == competition_id).all()
     if len(teams) < 2:
         raise HTTPException(status_code=400, detail="Need at least 2 teams to generate fixtures")
+
+    # Delete children before parents: results → standings → fixtures → groups.
+    # Bulk deletes bypass ORM cascades, so each table is cleared explicitly.
+    fixture_ids = db.query(Fixture.id).filter(Fixture.competition_id == competition_id)
+    db.query(Result).filter(Result.fixture_id.in_(fixture_ids)).delete(synchronize_session=False)
+    db.query(Standing).filter(Standing.competition_id == competition_id).delete()
+    db.query(Fixture).filter(Fixture.competition_id == competition_id).delete()
+    db.query(Team).filter(Team.competition_id == competition_id).update({"group_id": None})
+    db.query(Group).filter(Group.competition_id == competition_id).delete()
+    db.expire_all()
 
     _build_fixtures(db, competition, teams)
     competition.status = CompetitionStatus.ACTIVE
@@ -228,81 +215,39 @@ def advance_to_knockout(
 
     for group in groups:
         group_teams = db.query(Team).filter(Team.group_id == group.id).all()
-        standings_rows = db.query(Standing).filter(
-            Standing.competition_id == competition_id,
-            Standing.group_id == group.id,
-        ).all()
-        standings_map = {s.team_id: s for s in standings_rows}
+        ranked = ranked_table(db, competition, group_teams, group_id=group.id)
+        for pos, row in enumerate(ranked[: payload.teams_per_group]):
+            position_buckets[pos].append((str(row["team_id"]), str(group.id)))
 
-        ranked = []
-        for team in group_teams:
-            s = standings_map.get(team.id)
-            pts = s.points if s else 0
-            gd = (s.goals_for - s.goals_against) if s else 0
-            gf = s.goals_for if s else 0
-            ranked.append((str(team.id), pts, gd, gf))
+    # Seed order: all group winners, then all runners-up, etc. (random within
+    # each position). Top seeds receive any BYEs needed to fill the bracket.
+    seeded: list[tuple[str, str]] = []
+    for bucket in position_buckets:
+        bucket = list(bucket)
+        random.shuffle(bucket)
+        seeded.extend(bucket)
 
-        ranked.sort(key=lambda x: (-x[1], -x[2], -x[3]))
-        for pos, (team_id, *_) in enumerate(ranked[: payload.teams_per_group]):
-            position_buckets[pos].append((team_id, str(group.id)))
-
-    total_advancing = sum(len(b) for b in position_buckets)
-    if total_advancing < 2:
+    if len(seeded) < 2:
         raise HTTPException(status_code=400, detail="Not enough teams to form a knockout bracket")
 
-    # Cross-seed: pair 1st-place finishers vs 2nd-place finishers from different groups.
-    # Randomise each bucket, then greedily match each winner with a runner-up from a
-    # different group to avoid same-group first-round matchups.
-    winners = list(position_buckets[0])
-    runners_up = list(position_buckets[1]) if len(position_buckets) > 1 else []
+    byes = num_byes(len(seeded))
+    bye_teams, playing = seeded[:byes], seeded[byes:]
 
-    random.shuffle(winners)
-    random.shuffle(runners_up)
+    # Pair each remaining higher seed with the lowest remaining seed from a
+    # different group, to avoid same-group first-round matchups where possible.
+    matches: list[tuple[str, str]] = []
+    while playing:
+        home_id, home_group = playing.pop(0)
+        candidates = [i for i, t in enumerate(playing) if t[1] != home_group] or list(range(len(playing)))
+        away_id, _ = playing.pop(candidates[-1])
+        matches.append((home_id, away_id))
 
-    advancing_team_ids: list[str] = []
+    entries = arrange_first_round([t[0] for t in bye_teams], matches)
 
-    if runners_up:
-        remaining_ru = list(runners_up)
-        for winner_id, winner_group in winners:
-            valid = [(i, r) for i, r in enumerate(remaining_ru) if r[1] != winner_group]
-            if not valid:
-                valid = list(enumerate(remaining_ru))  # fallback — take any
-            chosen_idx, (chosen_id, _) = random.choice(valid)
-            remaining_ru.pop(chosen_idx)
-            advancing_team_ids.append(winner_id)
-            advancing_team_ids.append(chosen_id)
-        # Any leftover teams from extra positions (3rd-place playoff etc.)
-        for pos in range(2, len(position_buckets)):
-            advancing_team_ids.extend(t[0] for t in position_buckets[pos])
-    else:
-        # Only one advancing position — just shuffle winners directly
-        advancing_team_ids = [t[0] for t in winners]
-
-    # First knockout round starts after the last group stage round
-    max_group_round = max(f.round_number for f in group_fixtures)
-    ko_start_round = max_group_round + 1
-
-    # Only create round-1 knockout fixtures (TBD rounds are skipped; later rounds
-    # are created automatically by advance_knockout_round after each result)
-    rounds = generate_knockout_bracket(advancing_team_ids)
-    total = len(advancing_team_ids)
-
-    new_fixtures = []
-    for round_offset, matches in enumerate(rounds):
-        round_number = ko_start_round + round_offset
-        label = get_knockout_round_label(total // (2 ** round_offset))
-        for home_id, away_id in matches:
-            if home_id is None and away_id is None:
-                continue
-            f = Fixture(
-                competition_id=competition_id,
-                home_team_id=home_id,
-                away_team_id=away_id,
-                round_number=round_number,
-                knockout_round=label,
-            )
-            db.add(f)
-            new_fixtures.append(f)
+    # First knockout round starts after the last group stage round; later rounds
+    # are created automatically by advance_knockout_round after each result
+    ko_start_round = max(f.round_number for f in group_fixtures) + 1
+    new_fixtures = create_first_round(db, competition_id, entries, round_number=ko_start_round)
 
     db.commit()
     for f in new_fixtures:
@@ -326,15 +271,29 @@ def add_manual_fixture(
     if payload.home_team_id == payload.away_team_id:
         raise HTTPException(status_code=400, detail="Home and away teams must be different")
 
+    teams = []
     for team_id in [payload.home_team_id, payload.away_team_id]:
         team = db.query(Team).filter(
             Team.id == team_id, Team.competition_id == competition_id
         ).first()
         if not team:
             raise HTTPException(status_code=400, detail=f"Team {team_id} not found in this competition")
+        teams.append(team)
+
+    # Group-stage matches must count towards a group table
+    group_id = None
+    if competition.format == CompetitionFormat.GROUP_KNOCKOUT:
+        home, away = teams
+        if home.group_id is None or home.group_id != away.group_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Manual fixtures in a group competition must be between teams in the same group",
+            )
+        group_id = home.group_id
 
     fixture = Fixture(
         competition_id=competition_id,
+        group_id=group_id,
         home_team_id=payload.home_team_id,
         away_team_id=payload.away_team_id,
         round_number=payload.round_number,
@@ -367,6 +326,11 @@ def delete_fixture(
         raise HTTPException(status_code=404, detail="Fixture not found")
     if fixture.result:
         raise HTTPException(status_code=400, detail="Cannot delete a fixture that already has a result")
+    if fixture.knockout_round:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot delete a knockout fixture; regenerate fixtures to rebuild the bracket",
+        )
 
     db.delete(fixture)
     db.commit()
@@ -383,7 +347,7 @@ def list_fixtures(
     query = db.query(Fixture).filter(Fixture.competition_id == competition_id)
     if round_number is not None:
         query = query.filter(Fixture.round_number == round_number)
-    return query.order_by(Fixture.round_number).all()
+    return query.order_by(Fixture.round_number, Fixture.bracket_position, Fixture.created_at).all()
 
 
 @router.patch("/schedule", status_code=status.HTTP_200_OK)

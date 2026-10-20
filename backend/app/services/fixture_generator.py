@@ -6,7 +6,6 @@ Supports:
   - knockout: single elimination bracket
 """
 from typing import List, Tuple
-import uuid
 
 
 def generate_round_robin(team_ids: List[str], two_legs: bool = False) -> List[List[Tuple[str, str]]]:
@@ -54,41 +53,57 @@ def generate_round_robin(team_ids: List[str], two_legs: bool = False) -> List[Li
     return rounds
 
 
-def generate_knockout_bracket(team_ids: List[str]) -> List[List[Tuple[str | None, str | None]]]:
+def bracket_size(num_teams: int) -> int:
+    """Smallest power of 2 that fits num_teams (minimum 2)."""
+    size = 2
+    while size < num_teams:
+        size *= 2
+    return size
+
+
+def num_byes(num_teams: int) -> int:
+    return bracket_size(num_teams) - num_teams
+
+
+def arrange_first_round(
+    bye_team_ids: List[str], matches: List[Tuple[str, str]]
+) -> List[Tuple[str, str | None]]:
     """
-    Generate a single-elimination knockout bracket.
+    Order first-round entries so each BYE sits next to a real match where
+    possible, meaning bye teams meet a match winner in round 2 rather than
+    each other. A BYE entry is (team_id, None).
+    """
+    byes = [(t, None) for t in bye_team_ids]
+    matches = list(matches)
+    entries = []
+    while byes or matches:
+        if byes:
+            entries.append(byes.pop(0))
+        if matches:
+            entries.append(matches.pop(0))
+    return entries
 
-    The number of teams must be a power of 2. If not, byes are added to
-    pad up to the next power of 2.
 
-    Returns rounds in order: [Round of 16, QF, SF, Final]
-    Each match is (home_id, away_id) — None means a BYE (auto-advance).
+def generate_knockout_bracket(team_ids: List[str]) -> List[Tuple[str, str | None]]:
+    """
+    Generate the first round of a single-elimination knockout bracket.
+
+    If the number of teams is not a power of 2, the top seeds (first in the
+    list) receive BYEs so that round 2 has a power-of-2 number of teams.
+    Later rounds are created after each round completes (see services/knockout.py).
 
     Args:
-        team_ids: list of team ID strings (ideally sorted by seeding)
+        team_ids: list of team ID strings, sorted by seeding
 
     Returns:
-        rounds: list of rounds, each a list of match tuples
+        first-round entries in bracket order. Each is (home_id, away_id);
+        away_id None means home_id has a BYE (auto-advances).
     """
-    import math
-
-    n = len(team_ids)
-    # Pad to next power of 2
-    next_power = 2 ** math.ceil(math.log2(n)) if n > 1 else 1
-    teams = list(team_ids) + [None] * (next_power - n)
-
-    rounds = []
-    current_round = [(teams[i], teams[i + 1]) for i in range(0, len(teams), 2)]
-    rounds.append(current_round)
-
-    # Remaining rounds are TBD placeholders (winners determined after each result)
-    num_remaining = int(math.log2(next_power)) - 1
-    for _ in range(num_remaining):
-        prev = rounds[-1]
-        tbd_round = [(None, None)] * (len(prev) // 2)
-        rounds.append(tbd_round)
-
-    return rounds
+    teams = list(team_ids)
+    byes = num_byes(len(teams))
+    bye_teams, playing = teams[:byes], teams[byes:]
+    matches = [(playing[i], playing[i + 1]) for i in range(0, len(playing), 2)]
+    return arrange_first_round(bye_teams, matches)
 
 
 def get_knockout_round_label(num_teams_remaining: int) -> str:

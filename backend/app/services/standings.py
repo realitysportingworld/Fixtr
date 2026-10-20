@@ -13,7 +13,8 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.models.models import Competition, Fixture, FixtureStatus, Result, Standing
+from app.models.models import Competition, Fixture, FixtureStatus, Result, Standing, Team
+from app.services.scoring import lower_score_wins, winning_side
 
 
 DEFAULT_SCORING = {"win": 3, "draw": 1, "loss": 0}
@@ -33,19 +34,20 @@ def recalculate_standings(
         raise ValueError(f"Competition {competition_id} not found")
 
     scoring = competition.scoring_config or DEFAULT_SCORING
+    lower_wins = lower_score_wins(competition)
 
-    # Fetch all completed fixtures in scope
-    query = (
+    # Fetch all completed non-knockout fixtures in scope. group_id=None means
+    # the ungrouped (league) table, not "every fixture in the competition".
+    fixtures = (
         db.query(Fixture)
         .filter(
             Fixture.competition_id == competition_id,
             Fixture.status == FixtureStatus.COMPLETED,
+            Fixture.knockout_round.is_(None),
+            Fixture.group_id == group_id if group_id else Fixture.group_id.is_(None),
         )
+        .all()
     )
-    if group_id:
-        query = query.filter(Fixture.group_id == group_id)
-
-    fixtures = query.all()
 
     # Aggregate stats per team
     stats: dict[UUID, dict] = {}
@@ -73,12 +75,13 @@ def recalculate_standings(
         away["goals_for"] += result.away_score
         away["goals_against"] += result.home_score
 
-        if result.home_score > result.away_score:
+        side = winning_side(result.home_score, result.away_score, lower_wins)
+        if side == "home":
             home["wins"] += 1
             home["points"] += scoring.get("win", 3)
             away["losses"] += 1
             away["points"] += scoring.get("loss", 0)
-        elif result.away_score > result.home_score:
+        elif side == "away":
             away["wins"] += 1
             away["points"] += scoring.get("win", 3)
             home["losses"] += 1
@@ -90,10 +93,10 @@ def recalculate_standings(
             away["points"] += scoring.get("draw", 1)
 
     # Delete existing standing rows in scope
-    delete_query = db.query(Standing).filter(Standing.competition_id == competition_id)
-    if group_id:
-        delete_query = delete_query.filter(Standing.group_id == group_id)
-    delete_query.delete()
+    db.query(Standing).filter(
+        Standing.competition_id == competition_id,
+        Standing.group_id == group_id if group_id else Standing.group_id.is_(None),
+    ).delete()
 
     # Write fresh rows
     new_standings = []
@@ -108,4 +111,44 @@ def recalculate_standings(
         new_standings.append(standing)
 
     db.commit()
-    return sorted(new_standings, key=lambda x: (-x.points, -(x.goals_for - x.goals_against)))
+    return new_standings
+
+
+def ranked_table(
+    db: Session,
+    competition: Competition,
+    teams: list[Team],
+    group_id: Optional[UUID] = None,
+) -> list[dict]:
+    """
+    Build sorted table rows (dicts) for the given teams from stored Standing rows.
+    Teams without results appear with zeros. group_id narrows the Standing rows
+    read; None reads all of the competition's rows.
+
+    Sorted by points, then goal difference, then goals scored (both reversed
+    for lower-wins sports like golf), then team name.
+    """
+    query = db.query(Standing).filter(Standing.competition_id == competition.id)
+    if group_id:
+        query = query.filter(Standing.group_id == group_id)
+    standings_map = {s.team_id: s for s in query.all()}
+
+    rows = []
+    for team in teams:
+        s = standings_map.get(team.id)
+        rows.append({
+            "team_id": team.id,
+            "team_name": team.name,
+            "played": s.played if s else 0,
+            "wins": s.wins if s else 0,
+            "draws": s.draws if s else 0,
+            "losses": s.losses if s else 0,
+            "goals_for": s.goals_for if s else 0,
+            "goals_against": s.goals_against if s else 0,
+            "goal_difference": (s.goals_for - s.goals_against) if s else 0,
+            "points": s.points if s else 0,
+        })
+
+    sign = 1 if lower_score_wins(competition) else -1
+    rows.sort(key=lambda r: (-r["points"], sign * r["goal_difference"], sign * r["goals_for"], r["team_name"]))
+    return rows

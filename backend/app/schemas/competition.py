@@ -4,6 +4,7 @@ from datetime import datetime
 from pydantic import BaseModel, field_validator
 
 from app.models.models import CompetitionFormat, SportType, CompetitionStatus
+from app.services.scoring import validate_scoring_config
 
 FREE_TIER_LIMIT = 32
 
@@ -26,12 +27,22 @@ class CompetitionCreate(BaseModel):
             raise ValueError("must be an even number")
         return v
 
+    @field_validator("scoring_config")
+    @classmethod
+    def scoring_config_valid(cls, v):
+        return validate_scoring_config(v)
+
 
 class CompetitionUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     status: Optional[CompetitionStatus] = None
     scoring_config: Optional[dict] = None
+
+    @field_validator("scoring_config")
+    @classmethod
+    def scoring_config_valid(cls, v):
+        return validate_scoring_config(v)
 
 
 class CompetitionResponse(BaseModel):

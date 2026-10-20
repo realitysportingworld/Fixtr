@@ -132,7 +132,8 @@ class Fixture(Base):
     group_id = Column(UUID(as_uuid=True), ForeignKey("groups.id"), nullable=True)
 
     home_team_id = Column(UUID(as_uuid=True), ForeignKey("teams.id"), nullable=False)
-    away_team_id = Column(UUID(as_uuid=True), ForeignKey("teams.id"), nullable=False)
+    # null = knockout BYE (home team auto-advances)
+    away_team_id = Column(UUID(as_uuid=True), ForeignKey("teams.id"), nullable=True)
 
     round_number = Column(Integer, nullable=False)
     scheduled_at = Column(DateTime, nullable=True)
@@ -140,6 +141,8 @@ class Fixture(Base):
 
     # Knockout stage metadata
     knockout_round = Column(String, nullable=True)  # e.g. "QF", "SF", "F"
+    # Position within the knockout round; winners of 0 & 1 meet next round, etc.
+    bracket_position = Column(Integer, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -148,6 +151,10 @@ class Fixture(Base):
     home_team = relationship("Team", foreign_keys=[home_team_id], back_populates="home_fixtures")
     away_team = relationship("Team", foreign_keys=[away_team_id], back_populates="away_fixtures")
     result = relationship("Result", back_populates="fixture", uselist=False, cascade="all, delete-orphan")
+
+    @property
+    def is_bye(self):
+        return self.knockout_round is not None and self.away_team_id is None
 
     @property
     def home_score(self):
