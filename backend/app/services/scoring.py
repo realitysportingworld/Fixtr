@@ -8,7 +8,10 @@ the standings calculator. Fields:
     score_label         — display label for the score column (Goals, Points, etc.)
     lower_wins          — optional; if true the lower score wins (e.g. golf strokes)
 """
+import json
 from typing import Optional
+
+MAX_SCORING_CONFIG_BYTES = 2_000
 
 SPORT_DEFAULTS: dict[str, dict] = {
     "football": {
@@ -60,6 +63,8 @@ def validate_scoring_config(config: Optional[dict]) -> Optional[dict]:
     """Raise ValueError if a user-supplied scoring config has invalid values."""
     if config is None:
         return None
+    if len(json.dumps(config)) > MAX_SCORING_CONFIG_BYTES:
+        raise ValueError("scoring_config is too large")
     for key in ("win", "draw", "loss"):
         value = config.get(key)
         if value is not None and (isinstance(value, bool) or not isinstance(value, int)):

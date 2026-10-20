@@ -7,14 +7,16 @@ from app.models.models import CompetitionFormat, SportType, CompetitionStatus
 from app.services.scoring import validate_scoring_config
 
 FREE_TIER_LIMIT = 32
+# Hard ceiling for everyone, premium included (auto-generate creates this many teams)
+MAX_PARTICIPANTS = 512
 
 
 class CompetitionCreate(BaseModel):
-    name: str = Field(min_length=1)
-    description: Optional[str] = None
+    name: str = Field(min_length=1, max_length=100)
+    description: Optional[str] = Field(default=None, max_length=1000)
     format: CompetitionFormat
     sport: SportType
-    max_participants: int = Field(ge=2)
+    max_participants: int = Field(ge=2, le=MAX_PARTICIPANTS)
     num_groups: Optional[int] = None
     scoring_config: Optional[dict] = None
 
@@ -36,8 +38,8 @@ class CompetitionCreate(BaseModel):
 
 
 class CompetitionUpdate(BaseModel):
-    name: Optional[str] = Field(default=None, min_length=1)
-    description: Optional[str] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    description: Optional[str] = Field(default=None, max_length=1000)
     status: Optional[CompetitionStatus] = None
     scoring_config: Optional[dict] = None
 

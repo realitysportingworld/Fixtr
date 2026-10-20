@@ -33,8 +33,8 @@ class FixtureSchedule(BaseModel):
 class ManualFixtureCreate(BaseModel):
     home_team_id: UUID
     away_team_id: UUID
-    round_number: int
+    round_number: int = Field(ge=1, le=10_000)
 
 
 class AdvanceToKnockoutRequest(BaseModel):
-    teams_per_group: int = Field(default=2, ge=1)
+    teams_per_group: int = Field(default=2, ge=1, le=64)

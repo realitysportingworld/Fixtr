@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class TeamCreate(BaseModel):
-    name: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=100)
 
 
 class TeamResponse(BaseModel):

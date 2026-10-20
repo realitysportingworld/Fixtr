@@ -82,7 +82,7 @@
 ### Stack
 - **Backend:** FastAPI + PostgreSQL (SQLAlchemy ORM, Alembic migrations)
 - **Mobile:** React Native + Expo
-- **Auth:** JWT (python-jose + passlib/bcrypt)
+- **Auth:** JWT (PyJWT) + bcrypt, in-memory login rate limiting
 
 ### Project Structure
 ```
