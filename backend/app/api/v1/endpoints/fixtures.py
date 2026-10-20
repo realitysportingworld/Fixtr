@@ -16,8 +16,8 @@ from app.schemas.fixture import (
 from app.services.fixture_generator import (
     arrange_first_round, generate_round_robin, generate_knockout_bracket, num_byes,
 )
-from app.services.knockout import create_first_round
-from app.services.standings import ranked_table
+from app.services.knockout import create_first_round, knockout_started
+from app.services.standings import ranked_table, sync_league_completion
 
 router = APIRouter()
 
@@ -64,6 +64,12 @@ def _build_fixtures(db: Session, competition: Competition, teams: list) -> list:
                 status_code=400,
                 detail="num_groups must be at least 2 for group knockout format",
             )
+        if len(teams) < 2 * competition.num_groups:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Need at least {2 * competition.num_groups} teams for "
+                       f"{competition.num_groups} groups (2 per group)",
+            )
 
         # Create groups (A, B, C, ...)
         groups = []
@@ -108,6 +114,8 @@ def generate_fixtures(
 ):
     competition = get_competition_or_404(competition_id, current_user, db)
 
+    if competition.status == CompetitionStatus.CANCELLED:
+        raise HTTPException(status_code=400, detail="Competition is cancelled")
     if competition.status != CompetitionStatus.DRAFT:
         raise HTTPException(status_code=400, detail="Fixtures already generated for this competition")
 
@@ -131,8 +139,11 @@ def regenerate_fixtures(
     """Wipe all fixtures, results, standings and groups, then regenerate from scratch."""
     competition = get_competition_or_404(competition_id, current_user, db)
 
-    if competition.status == CompetitionStatus.COMPLETED:
-        raise HTTPException(status_code=400, detail="Cannot regenerate fixtures for a completed competition")
+    if competition.status in (CompetitionStatus.COMPLETED, CompetitionStatus.CANCELLED):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot regenerate fixtures for a {competition.status.value} competition",
+        )
 
     teams = db.query(Team).filter(Team.competition_id == competition_id).all()
     if len(teams) < 2:
@@ -179,11 +190,7 @@ def advance_to_knockout(
         raise HTTPException(status_code=400, detail="Competition must be active")
 
     # Guard: knockout phase not already started
-    existing_ko = db.query(Fixture).filter(
-        Fixture.competition_id == competition_id,
-        Fixture.knockout_round.isnot(None),
-    ).first()
-    if existing_ko:
+    if knockout_started(db, competition_id):
         raise HTTPException(status_code=400, detail="Knockout phase already started")
 
     # Check all group fixtures are complete
@@ -262,11 +269,23 @@ def add_manual_fixture(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Add a single fixture manually. Activates the competition on first manual fixture."""
+    """
+    Add a single fixture manually. Activates the competition on first manual
+    fixture; adding one to a completed league reopens it.
+    """
     competition = get_competition_or_404(competition_id, current_user, db)
 
-    if competition.status == CompetitionStatus.COMPLETED:
+    if competition.status == CompetitionStatus.CANCELLED:
+        raise HTTPException(status_code=400, detail="Cannot add fixtures to a cancelled competition")
+    if competition.status == CompetitionStatus.COMPLETED and competition.format != CompetitionFormat.LEAGUE:
         raise HTTPException(status_code=400, detail="Cannot add fixtures to a completed competition")
+    if competition.format == CompetitionFormat.KNOCKOUT:
+        raise HTTPException(
+            status_code=400,
+            detail="Knockout brackets are generated automatically; manual fixtures aren't supported",
+        )
+    if competition.format == CompetitionFormat.GROUP_KNOCKOUT and knockout_started(db, competition_id):
+        raise HTTPException(status_code=400, detail="Cannot add group fixtures after the knockout phase has started")
 
     if payload.home_team_id == payload.away_team_id:
         raise HTTPException(status_code=400, detail="Home and away teams must be different")
@@ -304,6 +323,7 @@ def add_manual_fixture(
         competition.status = CompetitionStatus.ACTIVE
 
     db.commit()
+    sync_league_completion(db, competition)
     db.refresh(fixture)
     return fixture
 
@@ -316,7 +336,7 @@ def delete_fixture(
     current_user: User = Depends(get_current_user),
 ):
     """Delete a single fixture. Only allowed if the fixture has no result yet."""
-    get_competition_or_404(competition_id, current_user, db)
+    competition = get_competition_or_404(competition_id, current_user, db)
 
     fixture = db.query(Fixture).filter(
         Fixture.id == fixture_id,
@@ -334,6 +354,8 @@ def delete_fixture(
 
     db.delete(fixture)
     db.commit()
+    # Removing the last unplayed fixture can finish a league
+    sync_league_completion(db, competition)
 
 
 @router.get("/", response_model=list[FixtureResponse])

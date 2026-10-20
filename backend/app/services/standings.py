@@ -13,7 +13,10 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.models.models import Competition, Fixture, FixtureStatus, Result, Standing, Team
+from app.models.models import (
+    Competition, CompetitionFormat, CompetitionStatus,
+    Fixture, FixtureStatus, Group, Result, Standing, Team,
+)
 from app.services.scoring import lower_score_wins, winning_side
 
 
@@ -112,6 +115,36 @@ def recalculate_standings(
 
     db.commit()
     return new_standings
+
+
+def recalculate_all_standings(db: Session, competition: Competition) -> None:
+    """Rebuild every table in the competition (league table, or each group's)."""
+    if competition.format == CompetitionFormat.GROUP_KNOCKOUT:
+        for group in db.query(Group).filter(Group.competition_id == competition.id).all():
+            recalculate_standings(db, competition.id, group_id=group.id)
+    else:
+        recalculate_standings(db, competition.id)
+
+
+def sync_league_completion(db: Session, competition: Competition) -> None:
+    """
+    A league is completed once every fixture has been played, and reopens
+    if new unplayed fixtures are added. Knockout formats complete when their
+    Final is played (see services/knockout.py).
+    """
+    if competition.format != CompetitionFormat.LEAGUE:
+        return
+    if competition.status not in (CompetitionStatus.ACTIVE, CompetitionStatus.COMPLETED):
+        return
+
+    statuses = [
+        s for (s,) in db.query(Fixture.status).filter(Fixture.competition_id == competition.id).all()
+    ]
+    all_played = bool(statuses) and all(s == FixtureStatus.COMPLETED for s in statuses)
+    new_status = CompetitionStatus.COMPLETED if all_played else CompetitionStatus.ACTIVE
+    if competition.status != new_status:
+        competition.status = new_status
+        db.commit()
 
 
 def ranked_table(

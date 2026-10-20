@@ -1,10 +1,10 @@
 from typing import Optional
 from uuid import UUID
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class TeamCreate(BaseModel):
-    name: str
+    name: str = Field(min_length=1)
 
 
 class TeamResponse(BaseModel):

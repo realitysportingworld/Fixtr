@@ -40,7 +40,13 @@ def add_team(
             detail=f"Competition is full ({competition.max_participants} teams max)",
         )
 
-    team = Team(name=payload.name, competition_id=competition_id)
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Team name cannot be blank")
+    if db.query(Team).filter(Team.competition_id == competition_id, Team.name == name).first():
+        raise HTTPException(status_code=400, detail=f"A team named '{name}' already exists in this competition")
+
+    team = Team(name=name, competition_id=competition_id)
     db.add(team)
     db.commit()
     db.refresh(team)

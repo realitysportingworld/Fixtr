@@ -5,9 +5,10 @@ from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
 from app.db.base import get_db
-from app.models.models import Competition, Standing, User
+from app.models.models import Competition, CompetitionStatus, Fixture, Result, Standing, User
 from app.schemas.competition import CompetitionCreate, CompetitionUpdate, CompetitionResponse, FREE_TIER_LIMIT
-from app.services.scoring import get_default_scoring
+from app.services.scoring import get_default_scoring, lower_score_wins, winning_side
+from app.services.standings import recalculate_all_standings
 
 router = APIRouter()
 
@@ -32,8 +33,8 @@ def create_competition(
         )
 
     data = payload.model_dump()
-    if data.get("scoring_config") is None:
-        data["scoring_config"] = get_default_scoring(data["sport"])
+    # Any keys the user leaves out fall back to the sport's defaults
+    data["scoring_config"] = {**get_default_scoring(data["sport"]), **(data["scoring_config"] or {})}
 
     competition = Competition(
         **data,
@@ -82,12 +83,73 @@ def update_competition(
     if not competition:
         raise HTTPException(status_code=404, detail="Competition not found")
 
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    updates = payload.model_dump(exclude_unset=True)
+    has_fixtures = db.query(Fixture.id).filter(Fixture.competition_id == competition_id).first() is not None
+
+    if updates.get("status") is not None:
+        # Draft means "teams editable, no fixtures yet"; once fixtures exist the
+        # competition can only be active, completed or cancelled.
+        if has_fixtures:
+            allowed = {CompetitionStatus.ACTIVE, CompetitionStatus.COMPLETED, CompetitionStatus.CANCELLED}
+        else:
+            allowed = {CompetitionStatus.DRAFT, CompetitionStatus.CANCELLED}
+        if updates["status"] not in allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Status can't be '{updates['status'].value}' "
+                       f"{'once fixtures exist' if has_fixtures else 'before fixtures are generated'}",
+            )
+
+    scoring_changed = False
+    if updates.get("scoring_config") is not None:
+        old_lower_wins = lower_score_wins(competition)
+        updates["scoring_config"] = {**(competition.scoring_config or {}), **updates["scoring_config"]}
+        competition.scoring_config = updates.pop("scoring_config")
+        scoring_changed = True
+
+        if lower_score_wins(competition) != old_lower_wins:
+            if not reassign_winners(db, competition):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Can't change lower_wins once knockout matches have results",
+                )
+    elif "scoring_config" in updates:
+        updates.pop("scoring_config")  # explicit null — keep the current rules
+
+    for field, value in updates.items():
+        if value is None and field != "description":
+            continue  # name and status can't be cleared
         setattr(competition, field, value)
 
     db.commit()
+
+    if scoring_changed and has_fixtures:
+        recalculate_all_standings(db, competition)
+
     db.refresh(competition)
     return competition
+
+
+def reassign_winners(db: Session, competition: Competition) -> bool:
+    """
+    Recompute winner_id for existing results after the lower_wins rule flips.
+    Returns False (changing nothing) if any knockout match already has a
+    result, since that would invalidate the bracket. Does NOT commit.
+    """
+    results = (
+        db.query(Result, Fixture)
+        .join(Fixture, Result.fixture_id == Fixture.id)
+        .filter(Fixture.competition_id == competition.id)
+        .all()
+    )
+    if any(fixture.knockout_round for _, fixture in results):
+        return False
+
+    lower_wins = lower_score_wins(competition)
+    for result, fixture in results:
+        side = winning_side(result.home_score, result.away_score, lower_wins)
+        result.winner_id = {"home": fixture.home_team_id, "away": fixture.away_team_id}.get(side)
+    return True
 
 
 @router.delete("/{competition_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -43,6 +43,13 @@ def create_first_round(
     return fixtures
 
 
+def knockout_started(db: Session, competition_id: UUID) -> bool:
+    return db.query(Fixture.id).filter(
+        Fixture.competition_id == competition_id,
+        Fixture.knockout_round.isnot(None),
+    ).first() is not None
+
+
 def fixture_winner(fixture: Fixture) -> Optional[UUID]:
     if fixture.is_bye:
         return fixture.home_team_id

@@ -1,7 +1,7 @@
 from typing import Optional
 from uuid import UUID
 from datetime import datetime
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models.models import CompetitionFormat, SportType, CompetitionStatus
 from app.services.scoring import validate_scoring_config
@@ -10,31 +10,33 @@ FREE_TIER_LIMIT = 32
 
 
 class CompetitionCreate(BaseModel):
-    name: str
+    name: str = Field(min_length=1)
     description: Optional[str] = None
     format: CompetitionFormat
     sport: SportType
-    max_participants: int
+    max_participants: int = Field(ge=2)
     num_groups: Optional[int] = None
     scoring_config: Optional[dict] = None
-
-    @field_validator("max_participants")
-    @classmethod
-    def must_be_positive_and_even(cls, v):
-        if v < 2:
-            raise ValueError("must have at least 2 participants")
-        if v % 2 != 0:
-            raise ValueError("must be an even number")
-        return v
 
     @field_validator("scoring_config")
     @classmethod
     def scoring_config_valid(cls, v):
         return validate_scoring_config(v)
 
+    @model_validator(mode="after")
+    def groups_fit_participants(self):
+        if self.format != CompetitionFormat.GROUP_KNOCKOUT:
+            self.num_groups = None  # only meaningful for group knockout
+            return self
+        if self.num_groups is None or self.num_groups < 2:
+            raise ValueError("num_groups must be at least 2 for group knockout format")
+        if self.max_participants < 2 * self.num_groups:
+            raise ValueError("max_participants must allow at least 2 teams per group")
+        return self
+
 
 class CompetitionUpdate(BaseModel):
-    name: Optional[str] = None
+    name: Optional[str] = Field(default=None, min_length=1)
     description: Optional[str] = None
     status: Optional[CompetitionStatus] = None
     scoring_config: Optional[dict] = None

@@ -5,11 +5,11 @@ from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
 from app.db.base import get_db
-from app.models.models import Competition, Fixture, FixtureStatus, Result, User
+from app.models.models import Competition, CompetitionStatus, Fixture, FixtureStatus, Result, User
 from app.schemas.result import ResultCreate, ResultResponse
-from app.services.knockout import advance_knockout_round, next_round_fixture
+from app.services.knockout import advance_knockout_round, knockout_started, next_round_fixture
 from app.services.scoring import lower_score_wins, winning_side
-from app.services.standings import recalculate_standings
+from app.services.standings import recalculate_standings, sync_league_completion
 
 router = APIRouter()
 
@@ -34,10 +34,17 @@ def get_fixture_or_404(fixture_id: UUID, competition_id: UUID, db: Session) -> F
     return fixture
 
 
-def determine_winner(competition: Competition, fixture: Fixture, payload: ResultCreate) -> UUID | None:
+def determine_winner(db: Session, competition: Competition, fixture: Fixture, payload: ResultCreate) -> UUID | None:
     """Validate the result for this fixture and return the winning team id (None = draw)."""
+    if competition.status == CompetitionStatus.CANCELLED:
+        raise HTTPException(status_code=400, detail="Competition is cancelled")
     if fixture.is_bye:
         raise HTTPException(status_code=400, detail="Cannot record a result for a BYE")
+    if fixture.group_id and knockout_started(db, competition.id):
+        raise HTTPException(
+            status_code=400,
+            detail="Group results are locked once the knockout phase has started",
+        )
 
     side = winning_side(payload.home_score, payload.away_score, lower_score_wins(competition))
     if side is None and fixture.knockout_round:
@@ -64,7 +71,7 @@ def record_result(
     if fixture.result:
         raise HTTPException(status_code=400, detail="Result already recorded. Use PUT to update it.")
 
-    winner_id = determine_winner(competition, fixture, payload)
+    winner_id = determine_winner(db, competition, fixture, payload)
 
     result = Result(
         fixture_id=fixture_id,
@@ -82,6 +89,7 @@ def record_result(
         advance_knockout_round(db, competition_id, fixture.round_number)
     else:
         recalculate_standings(db, competition_id, group_id=fixture.group_id)
+        sync_league_completion(db, competition)
 
     return result
 
@@ -100,7 +108,7 @@ def update_result(
     if not fixture.result:
         raise HTTPException(status_code=404, detail="No result recorded yet. Use POST to record it.")
 
-    winner_id = determine_winner(competition, fixture, payload)
+    winner_id = determine_winner(db, competition, fixture, payload)
     old_winner_id = fixture.result.winner_id
 
     # If the knockout winner changed and the next round already exists, swap
@@ -130,5 +138,6 @@ def update_result(
         advance_knockout_round(db, competition_id, fixture.round_number)
     else:
         recalculate_standings(db, competition_id, group_id=fixture.group_id)
+        sync_league_completion(db, competition)
 
     return fixture.result
