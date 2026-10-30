@@ -3,7 +3,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     Boolean, Column, DateTime, Enum, ForeignKey,
-    Integer, String, JSON, UniqueConstraint
+    Integer, String, JSON, UniqueConstraint, false
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -20,6 +20,7 @@ class CompetitionFormat(str, enum.Enum):
     LEAGUE = "league"                      # Round-robin, everyone plays everyone
     KNOCKOUT = "knockout"                  # Single elimination bracket
     GROUP_KNOCKOUT = "group_knockout"      # Group stage + knockout
+    LEAGUE_PHASE = "league_phase"          # UCL-style: one table, N matches each, then play-off + knockout
 
 
 class SportType(str, enum.Enum):
@@ -82,6 +83,13 @@ class Competition(Base):
     # e.g. {"win": 3, "draw": 1, "loss": 0} for football
     scoring_config = Column(JSON, nullable=True)
 
+    # Format options fixed at creation, e.g. {"two_legged": true} or, for
+    # LEAGUE_PHASE, {"matches_per_team": 8, "direct_qualifiers": 8, "playoff_qualifiers": 16}
+    format_config = Column(JSON, nullable=True)
+
+    # Public competitions can be found and viewed (read-only) by other users
+    is_public = Column(Boolean, nullable=False, default=False, server_default=false())
+
     max_participants = Column(Integer, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -90,6 +98,10 @@ class Competition(Base):
     teams = relationship("Team", back_populates="competition", cascade="all, delete-orphan")
     groups = relationship("Group", back_populates="competition", cascade="all, delete-orphan")
     fixtures = relationship("Fixture", back_populates="competition", cascade="all, delete-orphan")
+
+    @property
+    def owner_username(self):
+        return self.owner.username if self.owner else None
 
 
 class Team(Base):
@@ -143,6 +155,9 @@ class Fixture(Base):
     knockout_round = Column(String, nullable=True)  # e.g. "QF", "SF", "F"
     # Position within the knockout round; winners of 0 & 1 meet next round, etc.
     bracket_position = Column(Integer, nullable=True)
+    # Two-legged knockout ties: 1 or 2 (both legs share round and bracket_position).
+    # null = a single match.
+    leg = Column(Integer, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -163,6 +178,10 @@ class Fixture(Base):
     @property
     def away_score(self):
         return self.result.away_score if self.result else None
+
+    @property
+    def winner_id(self):
+        return self.result.winner_id if self.result else None
 
 
 class Result(Base):

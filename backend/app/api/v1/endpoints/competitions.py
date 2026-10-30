@@ -1,13 +1,17 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import or_
+from sqlalchemy.orm import Session, joinedload
 
+from app.api.deps import get_viewable_competition_or_404
 from app.core.security import get_current_user
 from app.db.base import get_db
 from app.models.models import Competition, CompetitionStatus, Fixture, Result, Standing, User
 from app.schemas.competition import CompetitionCreate, CompetitionUpdate, CompetitionResponse, FREE_TIER_LIMIT
-from app.services.scoring import get_default_scoring, lower_score_wins, winning_side
+from app.services.scoring import (
+    draws_allowed, get_default_scoring, get_scoring_presets, lower_score_wins, winning_side,
+)
 from app.services.standings import recalculate_all_standings
 
 router = APIRouter()
@@ -18,6 +22,40 @@ def get_scoring_defaults():
     """Return default scoring configs for all sports."""
     from app.services.scoring import SPORT_DEFAULTS
     return SPORT_DEFAULTS
+
+
+@router.get("/scoring-presets")
+def get_presets():
+    """Named scoring rule sets per sport (e.g. basketball: FIBA, NBA); the first is the default."""
+    from app.models.models import SportType
+    return {sport.value: get_scoring_presets(sport.value) for sport in SportType}
+
+
+@router.get("/public", response_model=list[CompetitionResponse])
+def search_public_competitions(
+    q: str = Query(default="", max_length=100),
+    limit: int = Query(default=20, ge=1, le=50),
+    offset: int = Query(default=0, ge=0, le=10_000),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Find competitions other users have made public, by name or owner username."""
+    query = (
+        db.query(Competition)
+        .join(User, Competition.owner_id == User.id)
+        .options(joinedload(Competition.owner))
+        .filter(Competition.is_public.is_(True))
+    )
+    term = q.strip()
+    if term:
+        # Treat % and _ in the search text literally
+        escaped = term.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+        pattern = f"%{escaped}%"
+        query = query.filter(or_(
+            Competition.name.ilike(pattern, escape="\\"),
+            User.username.ilike(pattern, escape="\\"),
+        ))
+    return query.order_by(Competition.created_at.desc(), Competition.id).offset(offset).limit(limit).all()
 
 
 @router.post("/", response_model=CompetitionResponse, status_code=status.HTTP_201_CREATED)
@@ -33,6 +71,7 @@ def create_competition(
         )
 
     data = payload.model_dump()
+    data["format_config"] = payload.format_config.model_dump(exclude_none=True) if payload.format_config else None
     # Any keys the user leaves out fall back to the sport's defaults
     data["scoring_config"] = {**get_default_scoring(data["sport"]), **(data["scoring_config"] or {})}
 
@@ -60,13 +99,7 @@ def get_competition(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    competition = db.query(Competition).filter(
-        Competition.id == competition_id,
-        Competition.owner_id == current_user.id,
-    ).first()
-    if not competition:
-        raise HTTPException(status_code=404, detail="Competition not found")
-    return competition
+    return get_viewable_competition_or_404(competition_id, current_user, db)
 
 
 @router.patch("/{competition_id}", response_model=CompetitionResponse)
@@ -107,6 +140,12 @@ def update_competition(
         competition.scoring_config = updates.pop("scoring_config")
         scoring_changed = True
 
+        if not draws_allowed(competition) and has_drawn_table_results(db, competition):
+            raise HTTPException(
+                status_code=400,
+                detail="Can't turn off draws: some results are already draws. Edit those first",
+            )
+
         if lower_score_wins(competition) != old_lower_wins:
             if not reassign_winners(db, competition):
                 raise HTTPException(
@@ -128,6 +167,14 @@ def update_competition(
 
     db.refresh(competition)
     return competition
+
+
+def has_drawn_table_results(db: Session, competition: Competition) -> bool:
+    return db.query(Result.id).join(Fixture, Result.fixture_id == Fixture.id).filter(
+        Fixture.competition_id == competition.id,
+        Fixture.knockout_round.is_(None),
+        Result.home_score == Result.away_score,
+    ).first() is not None
 
 
 def reassign_winners(db: Session, competition: Competition) -> bool:

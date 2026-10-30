@@ -17,7 +17,7 @@ from app.models.models import (
     Competition, CompetitionFormat, CompetitionStatus,
     Fixture, FixtureStatus, Group, Result, Standing, Team,
 )
-from app.services.scoring import lower_score_wins, winning_side
+from app.services.scoring import lower_score_wins, ranking_mode, winning_side
 
 
 DEFAULT_SCORING = {"win": 3, "draw": 1, "loss": 0}
@@ -158,8 +158,9 @@ def ranked_table(
     Teams without results appear with zeros. group_id narrows the Standing rows
     read; None reads all of the competition's rows.
 
-    Sorted by points, then goal difference, then goals scored (both reversed
-    for lower-wins sports like golf), then team name.
+    Sorted by points (or win percentage then wins, for "win_pct" ranking),
+    then goal difference, then goals scored (both reversed for lower-wins
+    sports like golf), then team name.
     """
     query = db.query(Standing).filter(Standing.competition_id == competition.id)
     if group_id:
@@ -180,8 +181,18 @@ def ranked_table(
             "goals_against": s.goals_against if s else 0,
             "goal_difference": (s.goals_for - s.goals_against) if s else 0,
             "points": s.points if s else 0,
+            "win_pct": round(s.wins / s.played, 3) if s and s.played else 0.0,
         })
 
     sign = 1 if lower_score_wins(competition) else -1
-    rows.sort(key=lambda r: (-r["points"], sign * r["goal_difference"], sign * r["goals_for"], r["team_name"]))
+    if ranking_mode(competition) == "win_pct":
+        primary = lambda r: (-r["win_pct"], -r["wins"])  # noqa: E731
+    else:
+        primary = lambda r: (-r["points"],)  # noqa: E731
+    rows.sort(key=lambda r: (*primary(r), sign * r["goal_difference"], sign * r["goals_for"], r["team_name"]))
+
+    if rows:
+        leader = rows[0]
+        for r in rows:
+            r["games_behind"] = ((leader["wins"] - r["wins"]) + (r["losses"] - leader["losses"])) / 2
     return rows

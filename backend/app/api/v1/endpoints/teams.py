@@ -3,22 +3,13 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_competition_or_404, get_viewable_competition_or_404
 from app.core.security import get_current_user
 from app.db.base import get_db
-from app.models.models import Competition, CompetitionStatus, Team, User
+from app.models.models import CompetitionStatus, Team, User
 from app.schemas.team import TeamCreate, TeamResponse
 
 router = APIRouter()
-
-
-def get_competition_or_404(competition_id: UUID, user: User, db: Session) -> Competition:
-    competition = db.query(Competition).filter(
-        Competition.id == competition_id,
-        Competition.owner_id == user.id,
-    ).first()
-    if not competition:
-        raise HTTPException(status_code=404, detail="Competition not found")
-    return competition
 
 
 @router.post("/", response_model=TeamResponse, status_code=status.HTTP_201_CREATED)
@@ -59,7 +50,7 @@ def list_teams(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    get_competition_or_404(competition_id, current_user, db)
+    get_viewable_competition_or_404(competition_id, current_user, db)
     return db.query(Team).filter(Team.competition_id == competition_id).all()
 
 

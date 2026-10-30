@@ -1,5 +1,5 @@
 import json
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 from datetime import datetime
 from pydantic import BaseModel, Field, model_validator
@@ -12,6 +12,9 @@ class ResultCreate(BaseModel):
     home_score: int = Field(le=MAX_SCORE)
     away_score: int = Field(le=MAX_SCORE)
     extra_data: Optional[dict] = None
+    # Knockout ties that finish level (on the day, or on aggregate after the
+    # second leg) are decided by penalties or another tiebreak: who won it
+    tiebreak_winner: Optional[Literal["home", "away"]] = None
 
     @model_validator(mode="after")
     def scores_non_negative(self):

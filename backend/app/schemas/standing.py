@@ -14,6 +14,8 @@ class StandingResponse(BaseModel):
     goals_against: int
     goal_difference: int
     points: int
+    win_pct: float = 0.0       # wins / played
+    games_behind: float = 0.0  # behind the table leader, NBA style
 
     class Config:
         from_attributes = True

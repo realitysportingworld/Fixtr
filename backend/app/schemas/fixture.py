@@ -17,9 +17,11 @@ class FixtureResponse(BaseModel):
     status: FixtureStatus
     knockout_round: Optional[str]
     bracket_position: Optional[int] = None
+    leg: Optional[int] = None  # 1 or 2 for two-legged ties, null for a single match
     is_bye: bool = False
     home_score: Optional[int] = None
     away_score: Optional[int] = None
+    winner_id: Optional[UUID] = None
 
     class Config:
         from_attributes = True

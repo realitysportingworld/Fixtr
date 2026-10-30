@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_competition_or_404, get_viewable_competition_or_404
 from app.core.security import get_current_user
 from app.db.base import get_db
 from app.models.models import (
@@ -16,20 +17,11 @@ from app.schemas.fixture import (
 from app.services.fixture_generator import (
     arrange_first_round, generate_round_robin, generate_knockout_bracket, num_byes,
 )
-from app.services.knockout import create_first_round, knockout_started
+from app.services import league_phase
+from app.services.knockout import create_first_round, is_two_legged, knockout_started
 from app.services.standings import ranked_table, sync_league_completion
 
 router = APIRouter()
-
-
-def get_competition_or_404(competition_id: UUID, user: User, db: Session) -> Competition:
-    competition = db.query(Competition).filter(
-        Competition.id == competition_id,
-        Competition.owner_id == user.id,
-    ).first()
-    if not competition:
-        raise HTTPException(status_code=404, detail="Competition not found")
-    return competition
 
 
 def _build_fixtures(db: Session, competition: Competition, teams: list) -> list:
@@ -56,7 +48,28 @@ def _build_fixtures(db: Session, competition: Competition, teams: list) -> list:
     elif competition.format == CompetitionFormat.KNOCKOUT:
         # Only round 1 is created; later rounds are added by advance_knockout_round
         entries = generate_knockout_bracket(team_ids)
-        fixtures.extend(create_first_round(db, competition.id, entries, round_number=1))
+        fixtures.extend(create_first_round(
+            db, competition.id, entries, round_number=1, two_legged=is_two_legged(competition),
+        ))
+
+    elif competition.format == CompetitionFormat.LEAGUE_PHASE:
+        config = competition.format_config or {}
+        matches = config.get("matches_per_team")
+        error = league_phase.settings_error(
+            len(teams), matches, config.get("direct_qualifiers"), config.get("playoff_qualifiers"),
+        )
+        if error:
+            raise HTTPException(status_code=400, detail=f"{error} (this competition has {len(teams)} teams)")
+        for round_number, matches_today in enumerate(league_phase.draw_league_phase(team_ids, matches), start=1):
+            for home_id, away_id in matches_today:
+                f = Fixture(
+                    competition_id=competition.id,
+                    home_team_id=home_id,
+                    away_team_id=away_id,
+                    round_number=round_number,
+                )
+                db.add(f)
+                fixtures.append(f)
 
     elif competition.format == CompetitionFormat.GROUP_KNOCKOUT:
         if not competition.num_groups or competition.num_groups < 2:
@@ -178,13 +191,17 @@ def advance_to_knockout(
     current_user: User = Depends(get_current_user),
 ):
     """
-    After all group stage matches are complete, advance the top N teams from
-    each group into a knockout bracket.
+    After all group (or league phase) matches are complete, start the knockout
+    bracket: the top N teams from each group, or the league phase qualifiers
+    (teams_per_group is ignored; the competition's format_config decides).
     """
     competition = get_competition_or_404(competition_id, current_user, db)
 
-    if competition.format != CompetitionFormat.GROUP_KNOCKOUT:
-        raise HTTPException(status_code=400, detail="Only GROUP_KNOCKOUT competitions support this")
+    if competition.format not in (CompetitionFormat.GROUP_KNOCKOUT, CompetitionFormat.LEAGUE_PHASE):
+        raise HTTPException(
+            status_code=400,
+            detail="Only group knockout and league phase competitions have a knockout stage to start",
+        )
 
     if competition.status != CompetitionStatus.ACTIVE:
         raise HTTPException(status_code=400, detail="Competition must be active")
@@ -192,6 +209,9 @@ def advance_to_knockout(
     # Guard: knockout phase not already started
     if knockout_started(db, competition_id):
         raise HTTPException(status_code=400, detail="Knockout phase already started")
+
+    if competition.format == CompetitionFormat.LEAGUE_PHASE:
+        return _start_league_phase_knockout(db, competition)
 
     # Check all group fixtures are complete
     group_fixtures = db.query(Fixture).filter(
@@ -254,8 +274,43 @@ def advance_to_knockout(
     # First knockout round starts after the last group stage round; later rounds
     # are created automatically by advance_knockout_round after each result
     ko_start_round = max(f.round_number for f in group_fixtures) + 1
-    new_fixtures = create_first_round(db, competition_id, entries, round_number=ko_start_round)
+    new_fixtures = create_first_round(
+        db, competition_id, entries, round_number=ko_start_round, two_legged=is_two_legged(competition),
+    )
 
+    db.commit()
+    for f in new_fixtures:
+        db.refresh(f)
+    return new_fixtures
+
+
+def _start_league_phase_knockout(db: Session, competition: Competition) -> list[Fixture]:
+    """Seed the knockout play-off (and BYEs for direct qualifiers) from the final table."""
+    stage = db.query(Fixture).filter(
+        Fixture.competition_id == competition.id,
+        Fixture.knockout_round.is_(None),
+    ).all()
+    if not stage:
+        raise HTTPException(status_code=400, detail="No league phase fixtures found")
+    incomplete = [f for f in stage if f.status != FixtureStatus.COMPLETED]
+    if incomplete:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{len(incomplete)} league phase fixture(s) not yet complete",
+        )
+
+    config = competition.format_config or {}
+    direct, playoff = config["direct_qualifiers"], config["playoff_qualifiers"]
+    teams = db.query(Team).filter(Team.competition_id == competition.id).all()
+    ranked = [str(row["team_id"]) for row in ranked_table(db, competition, teams)]
+    entries = league_phase.knockout_entries(ranked, direct, playoff)
+
+    new_fixtures = create_first_round(
+        db, competition.id, entries,
+        round_number=max(f.round_number for f in stage) + 1,
+        two_legged=is_two_legged(competition),
+        label=league_phase.PLAYOFF_ROUND_LABEL if playoff else None,
+    )
     db.commit()
     for f in new_fixtures:
         db.refresh(f)
@@ -284,8 +339,14 @@ def add_manual_fixture(
             status_code=400,
             detail="Knockout brackets are generated automatically; manual fixtures aren't supported",
         )
-    if competition.format == CompetitionFormat.GROUP_KNOCKOUT and knockout_started(db, competition_id):
-        raise HTTPException(status_code=400, detail="Cannot add group fixtures after the knockout phase has started")
+    if (
+        competition.format in (CompetitionFormat.GROUP_KNOCKOUT, CompetitionFormat.LEAGUE_PHASE)
+        and knockout_started(db, competition_id)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot add group or league phase fixtures after the knockout phase has started",
+        )
 
     if payload.home_team_id == payload.away_team_id:
         raise HTTPException(status_code=400, detail="Home and away teams must be different")
@@ -365,11 +426,13 @@ def list_fixtures(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    get_competition_or_404(competition_id, current_user, db)
+    get_viewable_competition_or_404(competition_id, current_user, db)
     query = db.query(Fixture).filter(Fixture.competition_id == competition_id)
     if round_number is not None:
         query = query.filter(Fixture.round_number == round_number)
-    return query.order_by(Fixture.round_number, Fixture.bracket_position, Fixture.created_at).all()
+    return query.order_by(
+        Fixture.round_number, Fixture.bracket_position, Fixture.leg, Fixture.created_at,
+    ).all()
 
 
 @router.patch("/schedule", status_code=status.HTTP_200_OK)

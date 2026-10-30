@@ -1,12 +1,13 @@
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_viewable_competition_or_404
 from app.core.security import get_current_user
 from app.db.base import get_db
-from app.models.models import Competition, Team, User
+from app.models.models import Team, User
 from app.schemas.standing import StandingResponse
 from app.services.standings import ranked_table
 
@@ -20,12 +21,7 @@ def get_standings(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    competition = db.query(Competition).filter(
-        Competition.id == competition_id,
-        Competition.owner_id == current_user.id,
-    ).first()
-    if not competition:
-        raise HTTPException(status_code=404, detail="Competition not found")
+    competition = get_viewable_competition_or_404(competition_id, current_user, db)
 
     teams_query = db.query(Team).filter(Team.competition_id == competition_id)
     if group_id:
