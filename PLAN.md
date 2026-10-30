@@ -52,6 +52,9 @@
 | 3.4 | Group → knockout transition (top N teams advance) | ✅ Done |
 | 3.5 | Champions League style league phase (N matches each, direct + play-off qualifiers) | ✅ Done |
 | 3.6 | Two-legged knockout ties (aggregate, penalties/tiebreak; single-match final) | ✅ Done |
+| 3.7 | Home-and-away leagues (double round-robin) | ✅ Done |
+| 3.8 | Match dates and times (per match or a whole round) | ✅ Done |
+| 3.9 | Clear a result (un-play a match; tables and bracket roll back) | ✅ Done |
 
 ---
 
@@ -64,6 +67,7 @@
 | 4.2 | Football, Basketball, Rugby, Golf scoring rules | ✅ Done |
 | 4.3 | Custom scoring builder (user-defined rules) | ✅ Done |
 | 4.4 | Scoring presets per sport (Basketball: FIBA / NBA win %), no-draw rule | ✅ Done |
+| 4.5 | Head-to-head tiebreaker (before or after goal difference) | ✅ Done |
 
 ---
 
@@ -138,6 +142,15 @@ npx expo start          # scan the QR code with Expo Go (phone on the same Wi-Fi
 The app calls port 8000 on the machine running Expo. To use another port or host,
 copy `mobile/.env.example` to `mobile/.env.local` and set `EXPO_PUBLIC_API_PORT`
 or `EXPO_PUBLIC_API_URL`, then restart Expo.
+
+### Running the Tests
+```bash
+# From project root, once
+pip install -r requirements-dev.txt
+
+cd backend
+python -m pytest          # uses a throwaway SQLite database, never the real one
+```
 
 ### Running Migrations
 ```bash

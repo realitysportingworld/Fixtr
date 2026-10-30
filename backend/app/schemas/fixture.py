@@ -1,7 +1,7 @@
 from typing import Optional
 from uuid import UUID
-from datetime import datetime
-from pydantic import BaseModel, Field
+from datetime import datetime, timezone
+from pydantic import BaseModel, Field, field_serializer, field_validator
 
 from app.models.models import FixtureStatus
 
@@ -26,10 +26,23 @@ class FixtureResponse(BaseModel):
     class Config:
         from_attributes = True
 
+    @field_serializer("scheduled_at")
+    def as_utc(self, value: Optional[datetime]):
+        # Stored as naive UTC; say so, or clients read it as their local time
+        return value.replace(tzinfo=timezone.utc) if value and value.tzinfo is None else value
+
 
 class FixtureSchedule(BaseModel):
     fixture_id: UUID
-    scheduled_at: datetime
+    scheduled_at: Optional[datetime]  # null clears the date
+
+    @field_validator("scheduled_at")
+    @classmethod
+    def to_naive_utc(cls, value: Optional[datetime]):
+        """Store UTC without tzinfo (the column has none). Naive input is taken as UTC."""
+        if value is not None and value.tzinfo is not None:
+            value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value
 
 
 class ManualFixtureCreate(BaseModel):

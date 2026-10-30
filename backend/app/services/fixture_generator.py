@@ -35,6 +35,9 @@ def generate_round_robin(team_ids: List[str], two_legs: bool = False) -> List[Li
         for i in range(n // 2):
             home = teams[i]
             away = teams[n - 1 - i]
+            # The circle method's fixed team would otherwise be at home every round
+            if i == 0 and round_num % 2 == 1:
+                home, away = away, home
             if home is not None and away is not None:
                 round_fixtures.append((home, away))
         rounds.append(round_fixtures)

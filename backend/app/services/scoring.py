@@ -10,12 +10,16 @@ the standings calculator. Fields:
     ranking             — optional; "points" (default) or "win_pct" (NBA-style table)
     allow_draws         — optional, default true; false rejects level league-table results
     preset              — optional; key of the preset the config came from (e.g. "nba")
+    tiebreak            — optional; how teams level on points (or win %) are separated:
+                          "score_difference" (default): difference, scored, then head-to-head
+                          "head_to_head": results between the level teams first, then difference
 """
 import json
 from typing import Optional
 
 MAX_SCORING_CONFIG_BYTES = 2_000
 RANKING_MODES = ("points", "win_pct")
+TIEBREAK_MODES = ("score_difference", "head_to_head")
 
 SPORT_DEFAULTS: dict[str, dict] = {
     "football": {
@@ -31,6 +35,7 @@ SPORT_DEFAULTS: dict[str, dict] = {
         "loss": 1,
         "score_label": "Points",
         "allow_draws": False,
+        "tiebreak": "head_to_head",
         "preset": "fiba",
     },
     "rugby": {
@@ -67,13 +72,13 @@ SCORING_PRESETS: dict[str, list[dict]] = {
         {
             "key": "fiba",
             "label": "FIBA (international)",
-            "description": "2 points for a win, 1 for a loss. Table ranked by points.",
+            "description": "2 points for a win, 1 for a loss. Teams level on points are split head-to-head.",
             "config": SPORT_DEFAULTS["basketball"],
         },
         {
             "key": "nba",
             "label": "NBA",
-            "description": "No points: table ranked by win percentage, with games behind the leader.",
+            "description": "No points: table ranked by win percentage, with games behind the leader. Ties split head-to-head.",
             "config": {
                 "win": 1,
                 "draw": 0,
@@ -81,6 +86,7 @@ SCORING_PRESETS: dict[str, list[dict]] = {
                 "score_label": "Points",
                 "allow_draws": False,
                 "ranking": "win_pct",
+                "tiebreak": "head_to_head",
                 "preset": "nba",
             },
         },
@@ -116,6 +122,8 @@ def validate_scoring_config(config: Optional[dict]) -> Optional[dict]:
         raise ValueError("scoring_config.score_label must be a string")
     if "ranking" in config and config["ranking"] not in RANKING_MODES:
         raise ValueError(f"scoring_config.ranking must be one of: {', '.join(RANKING_MODES)}")
+    if "tiebreak" in config and config["tiebreak"] not in TIEBREAK_MODES:
+        raise ValueError(f"scoring_config.tiebreak must be one of: {', '.join(TIEBREAK_MODES)}")
     if "preset" in config and config["preset"] is not None and not isinstance(config["preset"], str):
         raise ValueError("scoring_config.preset must be a string")
     return config
@@ -134,6 +142,10 @@ def draws_allowed(competition) -> bool:
 
 def ranking_mode(competition) -> str:
     return (competition.scoring_config or {}).get("ranking", "points")
+
+
+def tiebreak_mode(competition) -> str:
+    return (competition.scoring_config or {}).get("tiebreak", "score_difference")
 
 
 def winning_side(home_score: int, away_score: int, lower_wins: bool) -> Optional[str]:

@@ -139,10 +139,10 @@ def advance_knockout_round(db: Session, competition_id: UUID, round_number: int)
     If so, create next-round fixtures pairing winners in bracket order.
     If the round was the Final, mark the competition completed.
 
-    Safe to call repeatedly: does nothing if the next round already exists.
+    Safe to call repeatedly: only next-round ties that don't exist yet are created.
 
     Returns list of newly created Fixture objects (empty if round is
-    incomplete, the next round already exists, or this was the Final).
+    incomplete, the next round is already complete, or this was the Final).
     """
     ties = _ties(_round_fixtures(db, competition_id, round_number))
     if not ties:
@@ -161,18 +161,22 @@ def advance_knockout_round(db: Session, competition_id: UUID, round_number: int)
             db.commit()
         return []
 
+    # Ties already in the next round are kept; a cleared result removes its
+    # next-round tie, which is rebuilt here once the round is decided again
     next_round = round_number + 1
-    if _round_fixtures(db, competition_id, next_round):
-        return []
+    existing = {f.bracket_position for f in _round_fixtures(db, competition_id, next_round)}
 
     label = get_knockout_round_label(len(winners))
     two_legged = is_two_legged(competition) and len(winners) > 2  # the final is one match
 
     new_fixtures = []
     for i in range(0, len(winners), 2):
+        if i // 2 in existing:
+            continue
         new_fixtures.extend(_add_tie(
             db, competition_id, winners[i], winners[i + 1], next_round, label, i // 2, two_legged,
         ))
 
-    db.commit()
+    if new_fixtures:
+        db.commit()
     return new_fixtures

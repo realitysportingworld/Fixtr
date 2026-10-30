@@ -1,7 +1,7 @@
 import random
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_competition_or_404, get_viewable_competition_or_404
@@ -23,6 +23,9 @@ from app.services.standings import ranked_table, sync_league_completion
 
 router = APIRouter()
 
+# A whole league's fixtures fit in one request
+MAX_SCHEDULE_BATCH = 1_000
+
 
 def _build_fixtures(db: Session, competition: Competition, teams: list) -> list:
     """
@@ -33,7 +36,8 @@ def _build_fixtures(db: Session, competition: Competition, teams: list) -> list:
     team_ids = [str(t.id) for t in teams]
 
     if competition.format == CompetitionFormat.LEAGUE:
-        rounds = generate_round_robin(team_ids)
+        # two_legged on a league = everyone plays everyone home and away
+        rounds = generate_round_robin(team_ids, two_legs=is_two_legged(competition))
         for round_number, matches in enumerate(rounds, start=1):
             for home_id, away_id in matches:
                 f = Fixture(
@@ -438,20 +442,24 @@ def list_fixtures(
 @router.patch("/schedule", status_code=status.HTTP_200_OK)
 def schedule_fixtures(
     competition_id: UUID,
-    schedules: list[FixtureSchedule],
+    schedules: list[FixtureSchedule] = Body(max_length=MAX_SCHEDULE_BATCH),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Set scheduled_at datetime for one or more fixtures."""
+    """Set (or clear, with null) the date and time of one or more fixtures."""
     get_competition_or_404(competition_id, current_user, db)
 
-    for s in schedules:
-        fixture = db.query(Fixture).filter(
-            Fixture.id == s.fixture_id,
+    wanted = {s.fixture_id for s in schedules}
+    found = {
+        f.id: f for f in db.query(Fixture).filter(
             Fixture.competition_id == competition_id,
-        ).first()
-        if fixture:
-            fixture.scheduled_at = s.scheduled_at
+            Fixture.id.in_(wanted),
+        ).all()
+    } if wanted else {}
+    if len(found) != len(wanted):
+        raise HTTPException(status_code=404, detail="Fixture not found in this competition")
 
+    for s in schedules:
+        found[s.fixture_id].scheduled_at = s.scheduled_at
     db.commit()
-    return {"updated": len(schedules)}
+    return {"updated": len(wanted)}

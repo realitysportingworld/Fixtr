@@ -8,7 +8,8 @@ Scoring config example (stored on Competition.scoring_config):
     {"win": 3, "draw": 1, "loss": 0}  ← football
     {"win": 2, "draw": 0, "loss": 1}  ← some cup formats
 """
-from typing import Optional
+from itertools import groupby
+from typing import Callable, Optional
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -17,7 +18,7 @@ from app.models.models import (
     Competition, CompetitionFormat, CompetitionStatus,
     Fixture, FixtureStatus, Group, Result, Standing, Team,
 )
-from app.services.scoring import lower_score_wins, ranking_mode, winning_side
+from app.services.scoring import lower_score_wins, ranking_mode, tiebreak_mode, winning_side
 
 
 DEFAULT_SCORING = {"win": 3, "draw": 1, "loss": 0}
@@ -147,6 +148,78 @@ def sync_league_completion(db: Session, competition: Competition) -> None:
         db.commit()
 
 
+def _runs(rows: list[dict], key: Callable) -> list[list[dict]]:
+    """Split already-sorted rows into runs of rows with equal keys."""
+    return [list(run) for _, run in groupby(rows, key=key)]
+
+
+def _table_fixtures(db: Session, competition_id: UUID, group_id: Optional[UUID]) -> list[Fixture]:
+    """Completed table-stage (non-knockout) fixtures, in one group if given."""
+    query = db.query(Fixture).filter(
+        Fixture.competition_id == competition_id,
+        Fixture.status == FixtureStatus.COMPLETED,
+        Fixture.knockout_round.is_(None),
+    )
+    if group_id:
+        query = query.filter(Fixture.group_id == group_id)
+    return query.all()
+
+
+def _mini_table_keys(
+    fixtures: list[Fixture], team_ids: set, scoring: dict, lower_wins: bool, win_pct: bool,
+) -> dict:
+    """
+    Sort key per team from a mini-table of the matches among team_ids:
+    points (or win percentage), then score difference, then scored.
+    """
+    mini = {t: {"points": 0, "wins": 0, "played": 0, "for": 0, "against": 0} for t in team_ids}
+    for f in fixtures:
+        if f.result is None or f.home_team_id not in mini or f.away_team_id not in mini:
+            continue
+        home, away = mini[f.home_team_id], mini[f.away_team_id]
+        hs, as_ = f.result.home_score, f.result.away_score
+        for team, scored, conceded in ((home, hs, as_), (away, as_, hs)):
+            team["played"] += 1
+            team["for"] += scored
+            team["against"] += conceded
+        side = winning_side(hs, as_, lower_wins)
+        if side is None:
+            home["points"] += scoring.get("draw", 1)
+            away["points"] += scoring.get("draw", 1)
+        else:
+            winner, loser = (home, away) if side == "home" else (away, home)
+            winner["wins"] += 1
+            winner["points"] += scoring.get("win", 3)
+            loser["points"] += scoring.get("loss", 0)
+
+    sign = 1 if lower_wins else -1
+
+    def key(m: dict) -> tuple:
+        first = -(m["wins"] / m["played"] if m["played"] else 0) if win_pct else -m["points"]
+        return (first, sign * (m["for"] - m["against"]), sign * m["for"])
+
+    return {t: key(m) for t, m in mini.items()}
+
+
+def _order_by_head_to_head(level: list[dict], head_to_head: Callable, fallback: Callable) -> list[dict]:
+    """
+    Order teams that are level, by a mini-table of their matches against each
+    other. Teams still level are re-checked among themselves (UEFA style); a
+    set the mini-table can't split at all is ordered by `fallback`.
+    """
+    if len(level) < 2:
+        return level
+    keys = head_to_head({r["team_id"] for r in level})
+    key = lambda r: keys[r["team_id"]]  # noqa: E731
+    runs = _runs(sorted(level, key=key), key)
+    if len(runs) == 1:
+        return fallback(level)
+    ordered = []
+    for run in runs:
+        ordered.extend(_order_by_head_to_head(run, head_to_head, fallback))
+    return ordered
+
+
 def ranked_table(
     db: Session,
     competition: Competition,
@@ -159,8 +232,9 @@ def ranked_table(
     read; None reads all of the competition's rows.
 
     Sorted by points (or win percentage then wins, for "win_pct" ranking),
-    then goal difference, then goals scored (both reversed for lower-wins
-    sports like golf), then team name.
+    then by the competition's tiebreak (scoring.tiebreak_mode): goal
+    difference and goals scored (both reversed for lower-wins sports like
+    golf) and head-to-head, in either order; team name last.
     """
     query = db.query(Standing).filter(Standing.competition_id == competition.id)
     if group_id:
@@ -184,12 +258,39 @@ def ranked_table(
             "win_pct": round(s.wins / s.played, 3) if s and s.played else 0.0,
         })
 
-    sign = 1 if lower_score_wins(competition) else -1
-    if ranking_mode(competition) == "win_pct":
+    lower_wins = lower_score_wins(competition)
+    sign = 1 if lower_wins else -1
+    win_pct = ranking_mode(competition) == "win_pct"
+    if win_pct:
         primary = lambda r: (-r["win_pct"], -r["wins"])  # noqa: E731
     else:
         primary = lambda r: (-r["points"],)  # noqa: E731
-    rows.sort(key=lambda r: (*primary(r), sign * r["goal_difference"], sign * r["goals_for"], r["team_name"]))
+    overall = lambda r: (sign * r["goal_difference"], sign * r["goals_for"])  # noqa: E731
+
+    played: list[list[Fixture]] = []  # loaded only if some teams are level
+
+    def head_to_head(team_ids: set) -> dict:
+        """Mini-table key per team, from matches between the given teams only."""
+        if not played:
+            played.append(_table_fixtures(db, competition.id, group_id))
+        return _mini_table_keys(played[0], team_ids, competition.scoring_config or DEFAULT_SCORING,
+                                lower_wins, win_pct)
+
+    by_name = lambda group: sorted(group, key=lambda r: r["team_name"])  # noqa: E731
+    ranked = []
+    if tiebreak_mode(competition) == "head_to_head":
+        # Level teams: head-to-head first, then overall difference and scored
+        rows.sort(key=primary)
+        then_overall = lambda group: sorted(group, key=lambda r: (*overall(r), r["team_name"]))  # noqa: E731
+        for level in _runs(rows, primary):
+            ranked.extend(_order_by_head_to_head(level, head_to_head, then_overall))
+    else:
+        # Level on difference and scored too: head-to-head, then name
+        full = lambda r: (*primary(r), *overall(r))  # noqa: E731
+        rows.sort(key=full)
+        for level in _runs(rows, full):
+            ranked.extend(_order_by_head_to_head(level, head_to_head, by_name))
+    rows = ranked
 
     if rows:
         leader = rows[0]

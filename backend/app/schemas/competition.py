@@ -13,7 +13,8 @@ MAX_PARTICIPANTS = 512
 
 
 class FormatConfig(BaseModel):
-    # Knockout ties over two legs, decided on aggregate (the final is always one match)
+    # Knockout ties over two legs, decided on aggregate (the final is always one match).
+    # For a LEAGUE: everyone plays everyone twice, home and away.
     two_legged: bool = False
     # LEAGUE_PHASE only; missing values get defaults scaled to max_participants
     matches_per_team: Optional[int] = Field(default=None, ge=1, le=league_phase.MAX_MATCHES_PER_TEAM)
@@ -51,9 +52,6 @@ class CompetitionCreate(BaseModel):
     @model_validator(mode="after")
     def format_config_fits_format(self):
         config = self.format_config or FormatConfig()
-        if self.format == CompetitionFormat.LEAGUE:
-            self.format_config = None  # a league has no knockout
-            return self
         if self.format != CompetitionFormat.LEAGUE_PHASE:
             self.format_config = FormatConfig(two_legged=config.two_legged)
             return self

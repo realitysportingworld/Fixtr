@@ -195,3 +195,56 @@ def update_result(
 
     after_result(db, competition, fixture)
     return fixture.result
+
+
+@router.delete("/{fixture_id}/result", status_code=status.HTTP_204_NO_CONTENT)
+def clear_result(
+    competition_id: UUID,
+    fixture_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Un-play a match: remove its result and put it back to scheduled. A decided
+    knockout tie also loses its next-round tie (rebuilt when the tie is decided
+    again), which is refused once that next-round match has a result.
+    """
+    competition = get_competition_or_404(competition_id, current_user, db)
+    fixture = get_fixture_or_404(fixture_id, competition_id, db)
+
+    if competition.status == CompetitionStatus.CANCELLED:
+        raise HTTPException(status_code=400, detail="Competition is cancelled")
+    if fixture.is_bye:
+        raise HTTPException(status_code=400, detail="A BYE has no result to clear")
+    if not fixture.result:
+        raise HTTPException(status_code=404, detail="No result recorded yet")
+
+    if fixture.knockout_round is None:
+        if competition.format in STAGED_FORMATS and knockout_started(db, competition.id):
+            raise HTTPException(
+                status_code=400,
+                detail="Group and league phase results are locked once the knockout phase has started",
+            )
+    elif fixture.leg == 1:
+        second_leg = other_leg(db, fixture)
+        if second_leg and second_leg.result:
+            raise HTTPException(status_code=400, detail="Clear the second leg's result first")
+    else:
+        next_fixtures = next_round_fixtures(db, fixture)
+        if any(f.result for f in next_fixtures):
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot clear: the winner's next-round match already has a result",
+            )
+        for f in next_fixtures:
+            db.delete(f)
+        if competition.status == CompetitionStatus.COMPLETED:
+            competition.status = CompetitionStatus.ACTIVE  # the final is undecided again
+
+    db.delete(fixture.result)
+    fixture.status = FixtureStatus.SCHEDULED
+    db.commit()
+
+    if fixture.knockout_round is None:
+        recalculate_standings(db, competition.id, group_id=fixture.group_id)
+        sync_league_completion(db, competition)
