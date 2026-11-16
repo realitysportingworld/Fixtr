@@ -32,7 +32,7 @@ def _bind(self, dialect):
 
 sqltypes.Uuid.bind_processor = _bind
 
-from app.core import rate_limit  # noqa: E402
+from app.core import email  # noqa: E402
 from app.db.base import Base, engine  # noqa: E402
 import app.models.models  # noqa: E402,F401
 from app.main import app  # noqa: E402
@@ -47,12 +47,10 @@ def _foreign_keys_on(conn, _):
 
 @pytest.fixture(autouse=True)
 def fresh_state():
-    """Empty database and rate limiters for every test."""
+    """Empty database (rate limits and sent emails included) for every test."""
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
-    for limiter in (rate_limit.login_failures_by_email, rate_limit.login_failures_by_ip,
-                    rate_limit.registrations_by_ip):
-        limiter._events.clear()
+    email.outbox.clear()
     yield
 
 

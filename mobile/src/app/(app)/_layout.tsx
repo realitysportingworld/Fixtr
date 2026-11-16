@@ -20,6 +20,7 @@ export default function AppLayout() {
       <Stack.Screen name="index" options={{ title: 'Competitions' }} />
       <Stack.Screen name="new" options={{ title: 'New competition', presentation: 'modal' }} />
       <Stack.Screen name="search" options={{ title: 'Find competitions' }} />
+      <Stack.Screen name="account" options={{ title: 'Account' }} />
       <Stack.Screen name="competition/[id]/index" options={{ title: '' }} />
       <Stack.Screen name="competition/[id]/result" options={{ title: 'Result', presentation: 'modal' }} />
       <Stack.Screen name="competition/[id]/team/[teamId]" options={{ title: 'Squad' }} />

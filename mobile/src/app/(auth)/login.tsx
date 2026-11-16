@@ -1,7 +1,9 @@
+import { Link } from 'expo-router';
 import { useState } from 'react';
+import { StyleSheet } from 'react-native';
 
 import { AuthForm } from '@/components/AuthForm';
-import { Button, ErrorBanner, Field } from '@/components/ui';
+import { Button, colors, ErrorBanner, Field } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { errorText } from '@/lib/useLoad';
 
@@ -51,6 +53,13 @@ export default function Login() {
         onSubmitEditing={submit}
       />
       <Button title="Sign in" onPress={submit} loading={busy} disabled={!email || !password} />
+      <Link href={{ pathname: '/forgot', params: email.trim() ? { email: email.trim() } : {} }} style={styles.forgot}>
+        Forgot password?
+      </Link>
     </AuthForm>
   );
 }
+
+const styles = StyleSheet.create({
+  forgot: { color: colors.primary, fontWeight: '600', textAlign: 'center', fontSize: 15 },
+});

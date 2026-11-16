@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    Boolean, Column, DateTime, Enum, ForeignKey,
+    BigInteger, Boolean, Column, DateTime, Enum, ForeignKey, Index,
     Integer, String, JSON, UniqueConstraint, false
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -74,6 +74,58 @@ class User(Base):
     created_at = Column(DateTime, default=utcnow)
 
     competitions = relationship("Competition", back_populates="owner")
+
+
+class AuthSession(Base):
+    """
+    One signed-in device. The app holds a short-lived access token (a JWT
+    naming this session) and a long-lived refresh token, stored here only as
+    a hash. Each refresh swaps in a new refresh token, so a stolen one is
+    useful only until the real app next refreshes. Presenting the previous
+    token after that ends the session. Revoking a session logs that device
+    out at once, because every request checks it.
+    """
+    __tablename__ = "auth_sessions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    token_hash = Column(String(64), nullable=False, unique=True)
+    previous_token_hash = Column(String(64), nullable=True, index=True)
+    rotated_at = Column(DateTime, nullable=True)
+    user_agent = Column(String(200), nullable=True)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    last_used_at = Column(DateTime, default=utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    revoked_at = Column(DateTime, nullable=True)
+
+    user = relationship("User")
+
+
+class PasswordReset(Base):
+    """A one-time code emailed for "forgot password", stored as a keyed hash."""
+    __tablename__ = "password_resets"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    code_hash = Column(String(64), nullable=False)
+    attempts = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+
+
+class RateLimitEvent(Base):
+    """
+    One counted attempt (e.g. a failed login) for a rate-limit key. Kept in the
+    database so limits hold across restarts, workers and servers.
+    """
+    __tablename__ = "rate_limit_events"
+
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    key = Column(String(64), nullable=False)  # SHA-256 of limiter name + subject, so no emails or IPs stored
+    created_at = Column(DateTime, nullable=False, default=utcnow, index=True)
+
+    __table_args__ = (Index("ix_rate_limit_events_key_created", "key", "created_at"),)
 
 
 class Competition(Base):

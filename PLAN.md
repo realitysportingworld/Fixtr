@@ -81,6 +81,8 @@
 | 5.2 | RevenueCat subscription integration | ⬜ |
 | 5.3 | Share competition (public read-only view) | ✅ In-app search + read-only view; share links to a web page at `/c/{code}` (set `PUBLIC_BASE_URL` in production) |
 | 5.4 | Push notifications (match reminders) | ⬜ |
+| 5.6 | Accounts: refresh-token sessions, sign out (everywhere), change username/password, forgot password by email code, delete account | ✅ Done |
+| 5.7 | Production setup: Dockerfile, compose with Postgres + Caddy (HTTPS), DB-backed rate limits, DB health check (see DEPLOY.md) | ✅ Ready, not deployed |
 | 5.5 | App Store + Play Store submission | ⬜ |
 
 ---

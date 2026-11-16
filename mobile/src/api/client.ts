@@ -27,16 +27,73 @@ export class ApiError extends Error {
   }
 }
 
-let authToken: string | null = null;
-let onUnauthorized: (() => void) | null = null;
-
-export function setAuthToken(token: string | null) {
-  authToken = token;
+export interface Tokens {
+  access: string;
+  refresh: string;
 }
 
-/** Called when an authenticated request gets a 401 (expired or revoked token). */
+let tokens: Tokens | null = null;
+let onUnauthorized: (() => void) | null = null;
+let onTokensRefreshed: ((t: Tokens) => void) | null = null;
+
+export function setTokens(next: Tokens | null) {
+  tokens = next;
+}
+
+/** Called when the session can't be renewed (signed out elsewhere, expired, password changed). */
 export function setUnauthorizedHandler(handler: (() => void) | null) {
   onUnauthorized = handler;
+}
+
+/** Called with each new token pair, so it can be saved for the next launch. */
+export function setTokensRefreshedHandler(handler: ((t: Tokens) => void) | null) {
+  onTokensRefreshed = handler;
+}
+
+export function tokensFrom(r: TokenResponse): Tokens {
+  return { access: r.access_token, refresh: r.refresh_token };
+}
+
+type Renewal = 'renewed' | 'ended' | 'offline';
+
+// One refresh at a time: requests that fail together wait for the same renewal,
+// because a refresh token is only good once
+let refreshing: Promise<Renewal> | null = null;
+
+async function renewTokens(): Promise<Renewal> {
+  if (!tokens) return 'ended';
+  const stale = tokens;
+  refreshing ??= (async (): Promise<Renewal> => {
+    try {
+      const res = await fetch(`${API_URL}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: stale.refresh }),
+      });
+      if (res.status === 401) return 'ended';
+      if (!res.ok) return 'offline'; // server trouble (5xx, 429): keep the session for later
+      const next = tokensFrom((await res.json()) as TokenResponse);
+      if (tokens === stale) {
+        tokens = next;
+        onTokensRefreshed?.(next);
+      }
+      return 'renewed';
+    } catch {
+      return 'offline';
+    } finally {
+      refreshing = null;
+    }
+  })();
+  return refreshing;
+}
+
+/**
+ * Renew the saved session at launch. 'ended' means sign in again; 'offline'
+ * keeps the saved tokens so the app retries once the network is back.
+ */
+export async function resumeSession(saved: Tokens): Promise<Renewal> {
+  tokens = saved;
+  return renewTokens();
 }
 
 /** Turn FastAPI's error body into one readable sentence. */
@@ -57,14 +114,12 @@ function errorMessage(body: unknown, status: number): string {
   return `Request failed (${status})`;
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function send(method: string, path: string, body: unknown): Promise<Response> {
   const headers: Record<string, string> = {};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
-  if (authToken) headers.Authorization = `Bearer ${authToken}`;
-
-  let res: Response;
+  if (tokens) headers.Authorization = `Bearer ${tokens.access}`;
   try {
-    res = await fetch(`${API_URL}${path}`, {
+    return await fetch(`${API_URL}${path}`, {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -72,13 +127,25 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   } catch {
     throw new ApiError(`Can't reach the server at ${API_URL}`, 0);
   }
+}
+
+const SIGN_IN_PATHS = ['/auth/login', '/auth/register', '/auth/reset-password', '/auth/forgot-password'];
+
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const usedAccess = tokens?.access;
+  let res = await send(method, path, body);
+  // Access tokens are short-lived: renew once and retry
+  if (res.status === 401 && tokens && !SIGN_IN_PATHS.includes(path)) {
+    // Another request may already have renewed it while this one was in flight
+    const renewal = tokens.access !== usedAccess ? 'renewed' : await renewTokens();
+    if (renewal === 'offline') throw new ApiError(`Can't reach the server at ${API_URL}`, 0);
+    if (renewal === 'renewed') res = await send(method, path, body);
+    if (res.status === 401) onUnauthorized?.();
+  }
 
   if (res.status === 204) return undefined as T;
   const data = await res.json().catch(() => null);
-  if (!res.ok) {
-    if (res.status === 401 && authToken) onUnauthorized?.();
-    throw new ApiError(errorMessage(data, res.status), res.status);
-  }
+  if (!res.ok) throw new ApiError(errorMessage(data, res.status), res.status);
   return data as T;
 }
 
@@ -91,6 +158,16 @@ export const api = {
   register: (email: string, username: string, password: string) =>
     request<TokenResponse>('POST', '/auth/register', { email, username, password }),
   me: () => request<User>('GET', '/auth/me'),
+  logout: () => request<void>('POST', '/auth/logout'),
+  logoutEverywhere: () => request<void>('POST', '/auth/logout-everywhere'),
+  updateMe: (changes: { username: string }) => request<User>('PATCH', '/auth/me', changes),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<void>('POST', '/auth/change-password', { current_password: currentPassword, new_password: newPassword }),
+  // Always "sent", whether or not the email has an account
+  forgotPassword: (email: string) => request<{ detail: string }>('POST', '/auth/forgot-password', { email }),
+  resetPassword: (email: string, code: string, newPassword: string) =>
+    request<TokenResponse>('POST', '/auth/reset-password', { email, code, new_password: newPassword }),
+  deleteAccount: (password: string) => request<void>('DELETE', '/auth/me', { password }),
 
   // Competitions
   listCompetitions: () => request<Competition[]>('GET', '/competitions/'),

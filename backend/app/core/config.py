@@ -1,4 +1,6 @@
-from pydantic import field_validator
+from typing import Literal
+
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,7 +14,23 @@ class Settings(BaseSettings):
 
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
+    # Access tokens are short-lived; the app renews them with its refresh token
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    # A device stays signed in while it's used at least this often
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 30
+
+    # "Forgot password" codes
+    PASSWORD_RESET_CODE_MINUTES: int = 15
+    PASSWORD_RESET_MAX_ATTEMPTS: int = 5
+
+    # Email: "console" logs messages (development); "smtp" sends them
+    EMAIL_BACKEND: Literal["console", "smtp"] = "console"
+    EMAIL_FROM: str = "CompApp <no-reply@localhost>"
+    SMTP_HOST: str | None = None
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str | None = None
+    SMTP_PASSWORD: str | None = None
+    SMTP_STARTTLS: bool = True  # port 587; set False and use port 465 for implicit TLS
 
     # Browser origins allowed to call the API (e.g. Expo web on localhost).
     # Native mobile apps don't send an Origin header and don't need this.
@@ -37,6 +55,12 @@ class Settings(BaseSettings):
                 "python -c \"import secrets; print(secrets.token_hex(32))\""
             )
         return v
+
+    @model_validator(mode="after")
+    def smtp_configured(self):
+        if self.EMAIL_BACKEND == "smtp" and not self.SMTP_HOST:
+            raise ValueError("EMAIL_BACKEND=smtp needs SMTP_HOST")
+        return self
 
 
 settings = Settings()

@@ -1,0 +1,12 @@
+.git
+venv
+mobile
+deploy
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+backend/.env
+backend/tests
+.env*
+!.env.prod.example
+*.md

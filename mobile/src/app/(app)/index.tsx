@@ -9,7 +9,7 @@ import { FORMAT_LABELS, SPORT_LABELS } from '@/lib/format';
 import { useLoad } from '@/lib/useLoad';
 
 export default function Competitions() {
-  const { user, signOut } = useAuth();
+  const { user } = useAuth();
   const insets = useSafeAreaInsets();
   const { data, error, refreshing, reload, loading } = useLoad(async () => {
     const list = await api.listCompetitions();
@@ -26,8 +26,8 @@ export default function Competitions() {
             </Pressable>
           ),
           headerRight: () => (
-            <Pressable onPress={signOut} hitSlop={12}>
-              <Text style={styles.headerLink}>Sign out</Text>
+            <Pressable onPress={() => router.push('/account')} hitSlop={12} accessibilityLabel="Your account">
+              <Text style={styles.headerLink}>Account</Text>
             </Pressable>
           ),
         }}

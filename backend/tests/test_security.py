@@ -55,19 +55,28 @@ def test_login_rate_limiting(anon):
 
 def test_token_validation(anon):
     token = ok(register(anon, "tok@x.co", "tok", "longenough1"), 201)["access_token"]
-    uid = ok(anon.get(f"{AUTH}/me", headers={"Authorization": f"Bearer {token}"}))["id"]
+    claims = pyjwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
+    uid, sid = claims["sub"], claims["sid"]
+    assert claims["typ"] == "access"
 
     def status_with(payload, key=settings.SECRET_KEY, alg="HS256", raw=None):
         tok = raw or pyjwt.encode(payload, key, algorithm=alg)
         return anon.get(f"{AUTH}/me", headers={"Authorization": f"Bearer {tok}"}).status_code
 
     future = datetime.now(timezone.utc) + timedelta(hours=1)
-    assert status_with({"sub": uid, "exp": future}) == 200
-    assert status_with({"sub": uid, "exp": future}, key="x" * 40) == 401                   # wrong key
-    assert status_with({"sub": uid}) == 401                                                 # no exp
-    assert status_with({"sub": uid, "exp": datetime.now(timezone.utc) - timedelta(minutes=1)}) == 401
-    assert status_with({"sub": "not-a-uuid", "exp": future}) == 401
-    assert status_with({"sub": uid, "exp": future}, key=None, alg="none") == 401            # alg=none
+    good = {"sub": uid, "sid": sid, "typ": "access", "exp": future}
+    assert status_with(good) == 200
+    assert status_with(good, key="x" * 40) == 401                                           # wrong key
+    assert status_with({k: v for k, v in good.items() if k != "exp"}) == 401                # no exp
+    assert status_with({k: v for k, v in good.items() if k != "sid"}) == 401                # no session
+    assert status_with({**good, "typ": "refresh"}) == 401                                   # wrong kind
+    assert status_with({**good, "exp": datetime.now(timezone.utc) - timedelta(minutes=1)}) == 401
+    assert status_with({**good, "sub": "not-a-uuid"}) == 401
+    assert status_with({**good, "sid": "00000000-0000-0000-0000-000000000000"}) == 401     # unknown session
+    other = ok(register(anon, "tok2@x.co", "tok2", "longenough1"), 201)["access_token"]
+    other_uid = pyjwt.decode(other, settings.SECRET_KEY, algorithms=["HS256"])["sub"]
+    assert status_with({**good, "sub": other_uid}) == 401                                   # someone else's session
+    assert status_with(good, key=None, alg="none") == 401                                   # alg=none
     assert status_with(None, raw="garbage") == 401
 
 
