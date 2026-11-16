@@ -1,8 +1,9 @@
 import Constants from 'expo-constants';
 
 import type {
-  Competition, CompetitionFormat, CompetitionStatus, Fixture, FormatConfig, Group, ScoringConfig,
-  ScoringPreset, SportType, StandingRow, Team, TokenResponse, User,
+  Competition, CompetitionFormat, CompetitionStats, CompetitionStatus, Fixture, FormatConfig, Group,
+  MatchEvent, MatchEventInput, Player, ScoringConfig, ScoringPreset, SportType, StandingRow, Team,
+  TokenResponse, User,
 } from './types';
 
 /**
@@ -118,12 +119,25 @@ export const api = {
     }>,
   ) => request<Competition>('PATCH', comp(id), payload),
   deleteCompetition: (id: string) => request<void>('DELETE', comp(id)),
+  // Web page link anyone can open; enabling again returns the same link
+  enableShareLink: (id: string) => request<{ share_url: string }>('POST', `${comp(id)}/share`),
+  // Kills the link for good; enabling afterwards makes a new one
+  disableShareLink: (id: string) => request<void>('DELETE', `${comp(id)}/share`),
 
   // Teams
   listTeams: (id: string) => request<Team[]>('GET', `${comp(id)}/teams/`),
   addTeam: (id: string, name: string) => request<Team>('POST', `${comp(id)}/teams/`, { name }),
   fillTeams: (id: string) => request<Team[]>('POST', `${comp(id)}/teams/generate`),
   removeTeam: (id: string, teamId: string) => request<void>('DELETE', `${comp(id)}/teams/${teamId}`),
+
+  // Squads
+  listPlayers: (id: string, teamId: string) => request<Player[]>('GET', `${comp(id)}/teams/${teamId}/players/`),
+  addPlayer: (id: string, teamId: string, player: { name: string; shirt_number: number | null }) =>
+    request<Player>('POST', `${comp(id)}/teams/${teamId}/players/`, player),
+  updatePlayer: (id: string, teamId: string, playerId: string, changes: { name?: string; shirt_number?: number | null }) =>
+    request<Player>('PATCH', `${comp(id)}/teams/${teamId}/players/${playerId}`, changes),
+  removePlayer: (id: string, teamId: string, playerId: string) =>
+    request<void>('DELETE', `${comp(id)}/teams/${teamId}/players/${playerId}`),
 
   // Fixtures
   listFixtures: (id: string) => request<Fixture[]>('GET', `${comp(id)}/fixtures/`),
@@ -146,16 +160,21 @@ export const api = {
     fixtureId: string,
     score: { home: number; away: number; tiebreakWinner?: 'home' | 'away' | null },
     isUpdate: boolean,
+    // Replaces the match's scorers and cards; leave out to keep what's recorded
+    events?: MatchEventInput[],
   ) =>
     request<unknown>(isUpdate ? 'PUT' : 'POST', `${comp(id)}/fixtures/${fixtureId}/result`, {
       home_score: score.home,
       away_score: score.away,
       tiebreak_winner: score.tiebreakWinner ?? null,
+      ...(events ? { events } : {}),
     }),
+  matchEvents: (id: string, fixtureId: string) => request<MatchEvent[]>('GET', `${comp(id)}/fixtures/${fixtureId}/events`),
   // Un-play a match: back to scheduled, tables and bracket updated
   clearResult: (id: string, fixtureId: string) => request<void>('DELETE', `${comp(id)}/fixtures/${fixtureId}/result`),
 
   // Tables
   standings: (id: string) => request<StandingRow[]>('GET', `${comp(id)}/standings/`),
   groups: (id: string) => request<Group[]>('GET', `${comp(id)}/groups/`),
+  stats: (id: string) => request<CompetitionStats>('GET', `${comp(id)}/stats/`),
 };

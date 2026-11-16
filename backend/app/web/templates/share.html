@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+{% block title %}{{ c.name }} · {{ c.format }}{% endblock %}
+
+{% block meta %}
+<meta name="description" content="{{ c.headline }}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="CompApp">
+<meta property="og:title" content="{{ c.name }}">
+<meta property="og:description" content="{{ c.headline }}">
+<meta property="og:url" content="{{ canonical_url }}">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="{{ c.name }}">
+<meta name="twitter:description" content="{{ c.headline }}">
+<link rel="canonical" href="{{ canonical_url }}">
+{% endblock %}
+
+{% macro kickoff(k) -%}
+  {%- if k %}<time datetime="{{ k.iso }}" data-local>{{ k.text }}</time>{% endif -%}
+{%- endmacro %}
+
+{% macro match_row(m) %}
+<div class="match">
+  {% if m.away is none %}
+    <span class="side home">{{ m.home }}</span>
+    <span class="score pending">BYE</span>
+    <span class="side"></span>
+  {% else %}
+    <span class="side home{% if m.winner == 'home' %} won{% endif %}">{{ m.home }}</span>
+    {% if m.played %}
+      <span class="score" aria-label="{{ m.home_score }} to {{ m.away_score }}">{{ m.home_score }}–{{ m.away_score }}</span>
+    {% elif m.postponed %}
+      <span class="score pending">Postponed</span>
+    {% else %}
+      <span class="score pending">vs</span>
+    {% endif %}
+    <span class="side{% if m.winner == 'away' %} won{% endif %}">{{ m.away }}</span>
+    {% if m.kickoff or m.leg %}
+      <span class="meta">{% if m.leg %}Leg {{ m.leg }}{% if m.kickoff %} · {% endif %}{% endif %}{{ kickoff(m.kickoff) }}</span>
+    {% endif %}
+  {% endif %}
+</div>
+{% endmacro %}
+
+{% macro standings(t) %}
+<div class="card scroll">
+  <table>
+    <thead>
+      <tr>
+        <th scope="col"><span class="sr">#</span></th>
+        <th scope="col" class="team">Team</th>
+        <th scope="col" title="Played">P</th>
+        <th scope="col" title="Won">W</th>
+        {% if t.draws and not t.win_pct %}<th scope="col" title="Drawn">D</th>{% endif %}
+        <th scope="col" title="Lost">L</th>
+        {% if t.win_pct %}
+          <th scope="col" class="pts" title="Win percentage">PCT</th>
+          <th scope="col" title="Games behind">GB</th>
+        {% else %}
+          <th scope="col" title="{{ c.score_label }} difference">+/−</th>
+          <th scope="col" class="pts" title="Points">Pts</th>
+        {% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in t.rows %}
+      <tr>
+        <td class="pos{% if r.zone %} {{ r.zone }}{% endif %}">{{ r.position }}</td>
+        <td class="team">{{ r.team_name }}</td>
+        <td>{{ r.played }}</td>
+        <td>{{ r.wins }}</td>
+        {% if t.draws and not t.win_pct %}<td>{{ r.draws }}</td>{% endif %}
+        <td>{{ r.losses }}</td>
+        {% if t.win_pct %}
+          <td class="pts">{{ "%.3f"|format(r.win_pct) | replace("0.", ".", 1) }}</td>
+          <td>{% if r.games_behind %}{{ r.games_behind | round(1) | string | replace(".0", "") }}{% else %}–{% endif %}</td>
+        {% else %}
+          <td>{% if r.goal_difference > 0 %}+{% endif %}{{ r.goal_difference }}</td>
+          <td class="pts">{{ r.points }}</td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if t.zones and t.zones.direct %}
+<div class="legend">
+  <span><i class="sw-direct"></i>Through to the knockout</span>
+  {% if t.zones.playoff > t.zones.direct %}<span><i class="sw-playoff"></i>Knockout play-off</span>{% endif %}
+</div>
+{% endif %}
+{% endmacro %}
+
+{% block body %}
+<header class="hero">
+  <div class="wrap">
+    <p class="eyebrow">{{ c.sport }} · {{ c.format }}</p>
+    <h1>{{ c.name }}</h1>
+    <p><span class="pill {{ c.status }}">{{ c.status_label }}</span>{{ c.team_count }} teams{% if c.organiser %} · Organised by {{ c.organiser }}{% endif %}</p>
+    {% if c.description %}<p class="desc">{{ c.description }}</p>{% endif %}
+  </div>
+</header>
+
+{% set sections = [] %}
+{% if c.tables %}{% set _ = sections.append(("table", "Groups" if c.tables|length > 1 else "Table")) %}{% endif %}
+{% if c.bracket %}{% set _ = sections.append(("bracket", "Knockout")) %}{% endif %}
+{% if c.rounds %}{% set _ = sections.append(("matches", "Matches")) %}{% endif %}
+{% if c.scorers %}{% set _ = sections.append(("scorers", "Top scorers")) %}{% endif %}
+{% if sections|length > 1 %}
+<nav class="jump" aria-label="Sections">
+  <div class="wrap">{% for id, label in sections %}<a href="#{{ id }}">{{ label }}</a>{% endfor %}</div>
+</nav>
+{% endif %}
+
+<main class="wrap">
+  {% if c.tables %}
+  <section id="table">
+    <h2>{{ "Groups" if c.tables|length > 1 else "Table" }}</h2>
+    {% for t in c.tables %}
+      {% if t.title %}<h3>{{ t.title }}</h3>{% endif %}
+      {{ standings(t) }}
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  {% if c.bracket %}
+  <section id="bracket">
+    <h2>Knockout</h2>
+    {% for round in c.bracket %}
+      <h3>{{ round.label }}</h3>
+      <div class="card">
+        {% for tie in round.ties %}
+        <div class="tie">
+          {% if tie.bye %}
+            <div class="line"><span class="won">{{ tie.home }}</span><span class="nums">BYE</span></div>
+          {% else %}
+            {% for side in ("home", "away") %}
+            <div class="line">
+              <span{% if tie.winner == side %} class="won"{% endif %}>{{ tie[side] }}</span>
+              <span class="nums">
+                {%- if tie.aggregate -%}
+                  {{ tie.aggregate[0] if side == "home" else tie.aggregate[1] }}
+                {%- elif tie.legs|length == 1 and tie.legs[0].played -%}
+                  {{ tie.legs[0].home_score if side == "home" else tie.legs[0].away_score }}
+                {%- endif -%}
+              </span>
+            </div>
+            {% endfor %}
+            {% if tie.legs|length == 2 %}
+              <div class="note">
+                {% for leg in tie.legs %}Leg {{ leg.leg }}: {{ leg.home }} {% if leg.played %}{{ leg.home_score }}–{{ leg.away_score }}{% else %}v{% endif %} {{ leg.away }}{% if leg.kickoff and not leg.played %} · {{ kickoff(leg.kickoff) }}{% endif %}{% if not loop.last %}<br>{% endif %}{% endfor %}
+                {% if tie.aggregate %}<br>Aggregate {{ tie.aggregate[0] }}–{{ tie.aggregate[1] }}{% if tie.winner and tie.aggregate[0] == tie.aggregate[1] %}, {{ tie[tie.winner] }} won the tiebreak{% endif %}{% endif %}
+              </div>
+            {% elif tie.legs[0].played and tie.winner and tie.legs[0].home_score == tie.legs[0].away_score %}
+              <div class="note">{{ tie[tie.winner] }} won the tiebreak</div>
+            {% elif tie.legs[0].kickoff and not tie.legs[0].played %}
+              <div class="note">{{ kickoff(tie.legs[0].kickoff) }}</div>
+            {% endif %}
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  {% if c.rounds %}
+  <section id="matches">
+    <h2>Matches</h2>
+    {% for r in c.rounds %}
+    {% set played = r.matches | selectattr("played") | list | length %}
+    <details{% if r.open %} open{% endif %}>
+      <summary>{{ r.label }}<span class="summary-meta">{{ played }}/{{ r.matches|length }} played</span></summary>
+      <div class="card">
+        {% for m in r.matches %}{{ match_row(m) }}{% endfor %}
+      </div>
+    </details>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  {% if c.scorers %}
+  <section id="scorers">
+    <h2>Top scorers</h2>
+    <div class="card">
+      <ol class="board">
+        {% for s in c.scorers %}
+        <li>
+          <span class="rank">{{ s.rank }}</span>
+          <span class="who">{{ s.player_name }}<small>{{ s.team_name }}</small></span>
+          <span class="num" aria-label="{{ s.value }} goals">{{ s.value }}</span>
+        </li>
+        {% endfor %}
+      </ol>
+    </div>
+    {% if c.assists %}
+    <h3>Most assists</h3>
+    <div class="card">
+      <ol class="board">
+        {% for s in c.assists %}
+        <li>
+          <span class="rank">{{ s.rank }}</span>
+          <span class="who">{{ s.player_name }}<small>{{ s.team_name }}</small></span>
+          <span class="num" aria-label="{{ s.value }} assists">{{ s.value }}</span>
+        </li>
+        {% endfor %}
+      </ol>
+    </div>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {% if not c.tables and not c.bracket and not c.rounds %}
+  <section>
+    <h2>Teams</h2>
+    {% if c.teams %}
+      <div class="chips">{% for t in c.teams %}<span>{{ t }}</span>{% endfor %}</div>
+    {% else %}
+      <div class="card empty">No teams yet. Check back soon.</div>
+    {% endif %}
+    <p class="aside">The fixtures haven't been drawn yet.</p>
+  </section>
+  {% endif %}
+
+  <footer>
+    Made with CompApp
+    <span class="updated">Updated <time datetime="{{ generated_at }}" data-local data-style="time">{{ generated_at_text }}</time></span>
+  </footer>
+</main>
+
+<script nonce="{{ nonce }}">
+// Show kick-off times in the reader's own time zone (the page has UTC as a fallback)
+(function () {
+  var day = new Intl.DateTimeFormat(undefined, { weekday: "short", day: "numeric", month: "short" });
+  var time = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
+  document.querySelectorAll("time[data-local]").forEach(function (el) {
+    var d = new Date(el.getAttribute("datetime"));
+    if (isNaN(d)) return;
+    el.textContent = el.dataset.style === "time" ? day.format(d) + ", " + time.format(d) : day.format(d) + " · " + time.format(d);
+  });
+})();
+</script>
+{% endblock %}

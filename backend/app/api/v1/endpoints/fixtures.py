@@ -9,7 +9,7 @@ from app.core.security import get_current_user
 from app.db.base import get_db
 from app.models.models import (
     Competition, CompetitionFormat, CompetitionStatus,
-    Fixture, FixtureStatus, Group, Result, Standing, Team, User,
+    Fixture, FixtureStatus, Group, MatchEvent, Result, Standing, Team, User,
 )
 from app.schemas.fixture import (
     AdvanceToKnockoutRequest, FixtureResponse, FixtureSchedule, ManualFixtureCreate,
@@ -166,9 +166,10 @@ def regenerate_fixtures(
     if len(teams) < 2:
         raise HTTPException(status_code=400, detail="Need at least 2 teams to generate fixtures")
 
-    # Delete children before parents: results → standings → fixtures → groups.
+    # Delete children before parents: events, results → standings → fixtures → groups.
     # Bulk deletes bypass ORM cascades, so each table is cleared explicitly.
     fixture_ids = db.query(Fixture.id).filter(Fixture.competition_id == competition_id)
+    db.query(MatchEvent).filter(MatchEvent.fixture_id.in_(fixture_ids)).delete(synchronize_session=False)
     db.query(Result).filter(Result.fixture_id.in_(fixture_ids)).delete(synchronize_session=False)
     db.query(Standing).filter(Standing.competition_id == competition_id).delete()
     db.query(Fixture).filter(Fixture.competition_id == competition_id).delete()

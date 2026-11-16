@@ -68,6 +68,7 @@
 | 4.3 | Custom scoring builder (user-defined rules) | ✅ Done |
 | 4.4 | Scoring presets per sport (Basketball: FIBA / NBA win %), no-draw rule | ✅ Done |
 | 4.5 | Head-to-head tiebreaker (before or after goal difference) | ✅ Done |
+| 4.6 | Player stats: squads, scorers, assists, cards; Stats tab (football and custom) | ✅ Done |
 
 ---
 
@@ -78,7 +79,7 @@
 |---|------|--------|
 | 5.1 | Participant limit gate (free tier ≤ 32 teams) | ⬜ |
 | 5.2 | RevenueCat subscription integration | ⬜ |
-| 5.3 | Share competition (public read-only view) | 🟡 In-app search + read-only view done; share links outside the app not yet |
+| 5.3 | Share competition (public read-only view) | ✅ In-app search + read-only view; share links to a web page at `/c/{code}` (set `PUBLIC_BASE_URL` in production) |
 | 5.4 | Push notifications (match reminders) | ⬜ |
 | 5.5 | App Store + Play Store submission | ⬜ |
 

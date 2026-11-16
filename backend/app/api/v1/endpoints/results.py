@@ -3,13 +3,14 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_competition_or_404
+from app.api.deps import get_competition_or_404, get_viewable_competition_or_404
 from app.core.security import get_current_user
 from app.db.base import get_db
 from app.models.models import (
     Competition, CompetitionFormat, CompetitionStatus, Fixture, FixtureStatus, Result, User,
 )
-from app.schemas.result import ResultCreate, ResultResponse
+from app.schemas.result import MatchEventResponse, ResultCreate, ResultResponse
+from app.services.player_stats import build_events, check_recorded_events_fit, replace_events
 from app.services.knockout import advance_knockout_round, knockout_started, next_round_fixtures, other_leg
 from app.services.scoring import draws_allowed, lower_score_wins, winning_side
 from app.services.standings import recalculate_standings, sync_league_completion
@@ -133,6 +134,7 @@ def record_result(
         raise HTTPException(status_code=400, detail="Result already recorded. Use PUT to update it.")
 
     winner_id = determine_winner(db, competition, fixture, payload)
+    events = build_events(db, competition, fixture, payload.home_score, payload.away_score, payload.events or [])
 
     result = Result(
         fixture_id=fixture_id,
@@ -142,6 +144,7 @@ def record_result(
         winner_id=winner_id,
     )
     db.add(result)
+    replace_events(fixture, events)
     fixture.status = FixtureStatus.COMPLETED
     db.commit()
     db.refresh(result)
@@ -165,6 +168,11 @@ def update_result(
         raise HTTPException(status_code=404, detail="No result recorded yet. Use POST to record it.")
 
     winner_id = determine_winner(db, competition, fixture, payload)
+    if payload.events is None:
+        check_recorded_events_fit(db, fixture, payload.home_score, payload.away_score)
+        events = None
+    else:
+        events = build_events(db, competition, fixture, payload.home_score, payload.away_score, payload.events)
 
     if fixture.knockout_round and fixture.leg == 1:
         # Editing the first leg after the second was played re-decides the tie
@@ -189,6 +197,8 @@ def update_result(
     fixture.result.away_score = payload.away_score
     fixture.result.extra_data = payload.extra_data
     fixture.result.winner_id = winner_id
+    if events is not None:
+        replace_events(fixture, events)
 
     db.commit()
     db.refresh(fixture.result)
@@ -242,9 +252,22 @@ def clear_result(
             competition.status = CompetitionStatus.ACTIVE  # the final is undecided again
 
     db.delete(fixture.result)
+    fixture.events.clear()  # scorers and cards go with the result
     fixture.status = FixtureStatus.SCHEDULED
     db.commit()
 
     if fixture.knockout_round is None:
         recalculate_standings(db, competition.id, group_id=fixture.group_id)
         sync_league_completion(db, competition)
+
+
+@router.get("/{fixture_id}/events", response_model=list[MatchEventResponse])
+def list_events(
+    competition_id: UUID,
+    fixture_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Goals, assists and cards recorded for a match, in match order."""
+    get_viewable_competition_or_404(competition_id, current_user, db)
+    return get_fixture_or_404(fixture_id, competition_id, db).events

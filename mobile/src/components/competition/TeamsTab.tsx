@@ -1,3 +1,4 @@
+import { router } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
@@ -89,10 +90,18 @@ export function TeamsTab({ competition, teams, groups, readOnly, reload }: TabPr
         <Card style={{ paddingVertical: space.xs }}>
           {teams.map((t, i) => (
             <View key={t.id} style={[styles.team, i > 0 && styles.divider]}>
-              <Text style={styles.teamName}>{t.name}</Text>
-              {t.group_id && groupName.get(t.group_id) ? (
-                <Text style={styles.group}>{groupName.get(t.group_id)}</Text>
-              ) : null}
+              <Pressable
+                onPress={() => router.push({ pathname: '/competition/[id]/team/[teamId]', params: { id: competition.id, teamId: t.id } })}
+                style={styles.teamLink}
+                accessibilityRole="button"
+                accessibilityHint="Opens the squad"
+              >
+                <Text style={styles.teamName}>{t.name}</Text>
+                {t.group_id && groupName.get(t.group_id) ? (
+                  <Text style={styles.group}>{groupName.get(t.group_id)}</Text>
+                ) : null}
+                <Text style={styles.squad}>Squad ›</Text>
+              </Pressable>
               {editable && (
                 <Pressable onPress={() => removeTeam(t.id, t.name)} hitSlop={12} accessibilityLabel={`Remove ${t.name}`}>
                   <Text style={styles.remove}>Remove</Text>
@@ -144,7 +153,9 @@ const styles = StyleSheet.create({
   },
   team: { flexDirection: 'row', alignItems: 'center', paddingVertical: space.md, gap: space.sm },
   divider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
+  teamLink: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: space.sm, minHeight: 32 },
   teamName: { flex: 1, fontSize: 16, color: colors.ink },
+  squad: { color: colors.primary, fontWeight: '600', fontSize: 14 },
   group: { fontSize: 13, color: colors.muted },
   remove: { color: colors.danger, fontWeight: '600' },
   hint: { color: colors.muted, fontSize: 13, textAlign: 'center' },

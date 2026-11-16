@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.api.v1.router import router as api_router
+from app.web.share import router as share_router
 
 # Interactive API docs only in debug; production doesn't advertise its schema
 docs_kwargs = {} if settings.DEBUG else {"docs_url": None, "redoc_url": None, "openapi_url": None}
@@ -19,6 +20,7 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix="/api/v1")
+app.include_router(share_router)  # /c/{code} share pages
 
 
 @app.get("/health")

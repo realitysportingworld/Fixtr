@@ -1,7 +1,7 @@
 from typing import Optional
 from uuid import UUID
 from datetime import datetime, timezone
-from pydantic import BaseModel, Field, field_serializer, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 from app.models.models import FixtureStatus
 
@@ -23,8 +23,7 @@ class FixtureResponse(BaseModel):
     away_score: Optional[int] = None
     winner_id: Optional[UUID] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
     @field_serializer("scheduled_at")
     def as_utc(self, value: Optional[datetime]):

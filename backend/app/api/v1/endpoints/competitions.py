@@ -1,20 +1,31 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
-from app.api.deps import get_viewable_competition_or_404
+from app.api.deps import get_competition_or_404, get_viewable_competition_or_404
 from app.core.security import get_current_user
 from app.db.base import get_db
 from app.models.models import Competition, CompetitionStatus, Fixture, Result, Standing, User
-from app.schemas.competition import CompetitionCreate, CompetitionUpdate, CompetitionResponse, FREE_TIER_LIMIT
+from app.schemas.competition import (
+    CompetitionCreate, CompetitionResponse, CompetitionUpdate, FREE_TIER_LIMIT, ShareLinkResponse,
+)
 from app.services.scoring import (
     draws_allowed, get_default_scoring, get_scoring_presets, lower_score_wins, winning_side,
 )
+from app.services.sharing import new_share_code, share_url
 from app.services.standings import recalculate_all_standings
 
 router = APIRouter()
+
+
+def to_response(competition: Competition, request: Request, user: User) -> CompetitionResponse:
+    """The share link is the owner's to hand out, so only the owner sees it."""
+    response = CompetitionResponse.model_validate(competition)
+    if competition.share_code and competition.owner_id == user.id:
+        response.share_url = share_url(request, competition.share_code)
+    return response
 
 
 @router.get("/scoring-defaults")
@@ -87,25 +98,29 @@ def create_competition(
 
 @router.get("/", response_model=list[CompetitionResponse])
 def list_competitions(
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return db.query(Competition).filter(Competition.owner_id == current_user.id).all()
+    competitions = db.query(Competition).filter(Competition.owner_id == current_user.id).all()
+    return [to_response(c, request, current_user) for c in competitions]
 
 
 @router.get("/{competition_id}", response_model=CompetitionResponse)
 def get_competition(
     competition_id: UUID,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return get_viewable_competition_or_404(competition_id, current_user, db)
+    return to_response(get_viewable_competition_or_404(competition_id, current_user, db), request, current_user)
 
 
 @router.patch("/{competition_id}", response_model=CompetitionResponse)
 def update_competition(
     competition_id: UUID,
     payload: CompetitionUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -166,7 +181,7 @@ def update_competition(
         recalculate_all_standings(db, competition)
 
     db.refresh(competition)
-    return competition
+    return to_response(competition, request, current_user)
 
 
 def has_drawn_table_results(db: Session, competition: Competition) -> bool:
@@ -197,6 +212,33 @@ def reassign_winners(db: Session, competition: Competition) -> bool:
         side = winning_side(result.home_score, result.away_score, lower_wins)
         result.winner_id = {"home": fixture.home_team_id, "away": fixture.away_team_id}.get(side)
     return True
+
+
+@router.post("/{competition_id}/share", response_model=ShareLinkResponse)
+def enable_share_link(
+    competition_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Turn on the web page link, or return the current one (calling again is safe)."""
+    competition = get_competition_or_404(competition_id, current_user, db)
+    if not competition.share_code:
+        competition.share_code = new_share_code()
+        db.commit()
+    return ShareLinkResponse(share_url=share_url(request, competition.share_code))
+
+
+@router.delete("/{competition_id}/share", status_code=status.HTTP_204_NO_CONTENT)
+def disable_share_link(
+    competition_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Turn the link off for good. Turning sharing on again makes a new link."""
+    competition = get_competition_or_404(competition_id, current_user, db)
+    competition.share_code = None
+    db.commit()
 
 
 @router.delete("/{competition_id}", status_code=status.HTTP_204_NO_CONTENT)

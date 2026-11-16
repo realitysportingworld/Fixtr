@@ -1,7 +1,7 @@
 from typing import Optional
 from uuid import UUID
 from datetime import datetime
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.models import CompetitionFormat, SportType, CompetitionStatus
 from app.services import league_phase
@@ -98,7 +98,12 @@ class CompetitionResponse(BaseModel):
     is_public: bool = False
     owner_id: UUID
     owner_username: Optional[str] = None
+    # Owner only: the web page link, when link sharing is on
+    share_url: Optional[str] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ShareLinkResponse(BaseModel):
+    share_url: str

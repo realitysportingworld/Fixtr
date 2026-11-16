@@ -8,6 +8,7 @@ import { completeConfig, ScoringEditor } from '@/components/ScoringEditor';
 import { Button, Card, colors, SectionTitle, space } from '@/components/ui';
 import { confirm, showError } from '@/lib/dialogs';
 import { FORMAT_LABELS, lowerWins, STATUS_LABELS } from '@/lib/format';
+import { shareCompetition } from '@/lib/share';
 
 import type { TabProps } from './types';
 
@@ -86,6 +87,30 @@ export function SettingsTab({ competition, fixtures, reload }: TabProps) {
 
   const canRegenerate = hasFixtures && competition.status === 'active';
 
+  async function turnOffLink() {
+    const ok = await confirm(
+      'Turn off the link?',
+      'Anyone you sent it to will no longer be able to open it. You can make a new link later.',
+      'Turn off',
+      true,
+    );
+    if (ok) await run('link-off', () => api.disableShareLink(competition.id));
+  }
+
+  async function newLink() {
+    const ok = await confirm(
+      'Make a new link?',
+      'The current link stops working, so only people you send the new one to can open it.',
+      'New link',
+      true,
+    );
+    if (!ok) return;
+    await run('link-new', async () => {
+      await api.disableShareLink(competition.id);
+      await api.enableShareLink(competition.id);
+    });
+  }
+
   return (
     <View style={{ gap: space.md }}>
       <SectionTitle>Visibility</SectionTitle>
@@ -104,6 +129,32 @@ export function SettingsTab({ competition, fixtures, reload }: TabProps) {
           onValueChange={(is_public) => run('public', () => api.updateCompetition(competition.id, { is_public }))}
           trackColor={{ true: colors.primary }}
         />
+      </Card>
+
+      <SectionTitle>Share link</SectionTitle>
+      <Card style={{ gap: space.sm }}>
+        <Text style={styles.hint}>
+          {competition.share_url
+            ? 'Anyone with this link can see the table, fixtures, results and scorers in a web browser. No app or account needed.'
+            : 'Make a link to a web page with the table, fixtures, results and scorers, for anyone to open. No app or account needed.'}
+        </Text>
+        {competition.share_url ? (
+          <Text selectable style={styles.link} numberOfLines={2}>
+            {competition.share_url}
+          </Text>
+        ) : null}
+        <Button
+          title={competition.share_url ? 'Share link' : 'Make a link and share it'}
+          onPress={() => run('share', () => shareCompetition(competition))}
+          loading={busy === 'share'}
+          disabled={busy !== null}
+        />
+        {competition.share_url ? (
+          <View style={{ flexDirection: 'row', gap: space.sm }}>
+            <Button title="New link" variant="secondary" onPress={newLink} loading={busy === 'link-new'} disabled={busy !== null} style={{ flex: 1 }} />
+            <Button title="Turn off" variant="danger" onPress={turnOffLink} loading={busy === 'link-off'} disabled={busy !== null} style={{ flex: 1 }} />
+          </View>
+        ) : null}
       </Card>
 
       <SectionTitle>Status</SectionTitle>
@@ -152,4 +203,5 @@ const styles = StyleSheet.create({
   label: { fontSize: 16, fontWeight: '600', color: colors.ink },
   hint: { fontSize: 13, color: colors.muted },
   switchRow: { flexDirection: 'row', alignItems: 'center', gap: space.md },
+  link: { fontSize: 14, color: colors.primary, fontWeight: '600' },
 });

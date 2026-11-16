@@ -55,6 +55,7 @@ export interface Competition {
   is_public: boolean;
   owner_id: string;
   owner_username: string | null;
+  share_url: string | null; // owner only: the web page link, when sharing is on
   created_at: string;
 }
 
@@ -81,6 +82,51 @@ export interface Fixture {
   home_score: number | null;
   away_score: number | null;
   winner_id: string | null; // set by the backend, incl. aggregate and tiebreak wins
+}
+
+export interface Player {
+  id: string;
+  team_id: string;
+  name: string;
+  shirt_number: number | null;
+}
+
+export type MatchEventType = 'goal' | 'own_goal' | 'yellow_card' | 'red_card';
+
+export interface MatchEventInput {
+  type: MatchEventType;
+  player_id: string;
+  assist_player_id?: string | null; // goals only, a team-mate
+  minute?: number | null;
+}
+
+export interface MatchEvent extends MatchEventInput {
+  id: string;
+  fixture_id: string;
+  assist_player_id: string | null;
+  minute: number | null;
+}
+
+export interface PlayerStatRow {
+  rank: number; // shared on a tie
+  player_id: string;
+  player_name: string;
+  shirt_number: number | null;
+  team_id: string;
+  team_name: string;
+  value: number;
+}
+
+export interface DisciplineRow extends PlayerStatRow {
+  yellow_cards: number;
+  red_cards: number;
+}
+
+export interface CompetitionStats {
+  supported: boolean; // player stats are kept for this sport
+  scorers: PlayerStatRow[];
+  assists: PlayerStatRow[];
+  discipline: DisciplineRow[];
 }
 
 export interface StandingRow {

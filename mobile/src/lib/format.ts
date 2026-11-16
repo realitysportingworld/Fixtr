@@ -31,6 +31,11 @@ export function fixtureWinner(f: Fixture): string | null {
   return f.is_bye ? f.home_team_id : f.winner_id;
 }
 
+/** Sports where goals are credited to players (mirrors the backend's STATS_SPORTS). */
+export function playerStatsSupported(c: Competition): boolean {
+  return c.sport === 'football' || c.sport === 'custom';
+}
+
 export function lowerWins(c: Competition): boolean {
   return c.scoring_config?.lower_wins ?? c.sport === 'golf';
 }

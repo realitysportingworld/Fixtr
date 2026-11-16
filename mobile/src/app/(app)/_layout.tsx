@@ -22,6 +22,7 @@ export default function AppLayout() {
       <Stack.Screen name="search" options={{ title: 'Find competitions' }} />
       <Stack.Screen name="competition/[id]/index" options={{ title: '' }} />
       <Stack.Screen name="competition/[id]/result" options={{ title: 'Result', presentation: 'modal' }} />
+      <Stack.Screen name="competition/[id]/team/[teamId]" options={{ title: 'Squad' }} />
     </Stack>
   );
 }

@@ -1,6 +1,6 @@
 import re
 from uuid import UUID
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.core.security import BCRYPT_MAX_BYTES
 
@@ -52,5 +52,4 @@ class UserResponse(BaseModel):
     username: str
     is_premium: bool
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

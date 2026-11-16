@@ -1,8 +1,10 @@
 from pydantic import field_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env")
+
     APP_NAME: str = "CompApp API"
     DEBUG: bool = False
 
@@ -17,6 +19,11 @@ class Settings(BaseSettings):
     # In .env: CORS_ORIGINS=["http://localhost:8081","https://app.example.com"]
     CORS_ORIGINS: list[str] = []
 
+    # Public address of this server, used to build share links (e.g.
+    # https://compapp.example.com). Unset = the address the request came in on,
+    # which on a phone in development is the dev machine's LAN IP.
+    PUBLIC_BASE_URL: str | None = None
+
     # Failed logins allowed per email / per IP within the window before lockout
     LOGIN_MAX_ATTEMPTS: int = 5
     LOGIN_WINDOW_SECONDS: int = 15 * 60
@@ -30,9 +37,6 @@ class Settings(BaseSettings):
                 "python -c \"import secrets; print(secrets.token_hex(32))\""
             )
         return v
-
-    class Config:
-        env_file = ".env"
 
 
 settings = Settings()

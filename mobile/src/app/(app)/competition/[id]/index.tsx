@@ -6,15 +6,18 @@ import { api } from '@/api/client';
 import { BracketTab } from '@/components/competition/BracketTab';
 import { FixturesTab } from '@/components/competition/FixturesTab';
 import { SettingsTab } from '@/components/competition/SettingsTab';
+import { StatsTab } from '@/components/competition/StatsTab';
 import { TableTab } from '@/components/competition/TableTab';
 import { TeamsTab } from '@/components/competition/TeamsTab';
 import type { CompetitionData } from '@/components/competition/types';
 import { colors, ErrorBanner, Loading, space, StatusBadge } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
-import { FORMAT_LABELS, SPORT_LABELS } from '@/lib/format';
+import { showError } from '@/lib/dialogs';
+import { FORMAT_LABELS, playerStatsSupported, SPORT_LABELS } from '@/lib/format';
+import { shareCompetition } from '@/lib/share';
 import { useLoad } from '@/lib/useLoad';
 
-type Tab = 'teams' | 'fixtures' | 'table' | 'bracket' | 'settings';
+type Tab = 'teams' | 'fixtures' | 'table' | 'bracket' | 'stats' | 'settings';
 
 async function loadCompetition(id: string): Promise<Omit<CompetitionData, 'readOnly'>> {
   const [competition, teams, fixtures] = await Promise.all([
@@ -22,11 +25,12 @@ async function loadCompetition(id: string): Promise<Omit<CompetitionData, 'readO
     api.listTeams(id),
     api.listFixtures(id),
   ]);
-  const [standings, groups] = await Promise.all([
+  const [standings, groups, stats] = await Promise.all([
     competition.format === 'league' || competition.format === 'league_phase' ? api.standings(id) : Promise.resolve([]),
     competition.format === 'group_knockout' ? api.groups(id) : Promise.resolve([]),
+    playerStatsSupported(competition) && fixtures.length > 0 ? api.stats(id) : Promise.resolve(null),
   ]);
-  return { competition, teams, fixtures, standings, groups };
+  return { competition, teams, fixtures, standings, groups, stats };
 }
 
 export default function CompetitionScreen() {
@@ -34,6 +38,7 @@ export default function CompetitionScreen() {
   const { user } = useAuth();
   const { data, error, refreshing, reload, loading } = useLoad(() => loadCompetition(id));
   const [tab, setTab] = useState<Tab | null>(null);
+  const [sharing, setSharing] = useState(false);
 
   if (loading) return <Loading />;
   if (!data) {
@@ -52,6 +57,7 @@ export default function CompetitionScreen() {
   if (competition.format === 'league' || competition.format === 'league_phase') tabs.push({ key: 'table', label: 'Table' });
   if (competition.format === 'group_knockout') tabs.push({ key: 'table', label: 'Groups' });
   if (competition.format !== 'league') tabs.push({ key: 'bracket', label: 'Bracket' });
+  if (data.stats) tabs.push({ key: 'stats', label: 'Stats' });
   if (!readOnly) tabs.push({ key: 'settings', label: 'Settings' });
 
   // Start on Teams while setting up, then on the most useful view once play begins
@@ -60,9 +66,32 @@ export default function CompetitionScreen() {
   const active = tab && tabs.some((t) => t.key === tab) ? tab : defaultTab;
   const ctx = { ...data, readOnly, reload };
 
+  async function share() {
+    setSharing(true);
+    try {
+      await shareCompetition(competition);
+      if (!competition.share_url) await reload(); // the link was just turned on
+    } catch (e) {
+      showError(e);
+    } finally {
+      setSharing(false);
+    }
+  }
+
   return (
     <View style={{ flex: 1 }}>
-      <Stack.Screen options={{ title: competition.name }} />
+      <Stack.Screen
+        options={{
+          title: competition.name,
+          headerRight: readOnly
+            ? undefined
+            : () => (
+                <Pressable onPress={share} disabled={sharing} hitSlop={12} accessibilityRole="button" accessibilityLabel="Share a link to this competition">
+                  <Text style={[styles.share, sharing && { opacity: 0.5 }]}>Share</Text>
+                </Pressable>
+              ),
+        }}
+      />
       <View style={styles.header}>
         <View style={styles.metaRow}>
           <StatusBadge status={competition.status} />
@@ -72,7 +101,7 @@ export default function CompetitionScreen() {
         </View>
         {readOnly ? (
           <Text style={styles.meta}>
-            By @{competition.owner_username} Â· view only
+            By @{competition.owner_username} · view only
           </Text>
         ) : null}
         {competition.description ? <Text style={styles.description}>{competition.description}</Text> : null}
@@ -100,6 +129,7 @@ export default function CompetitionScreen() {
         {active === 'fixtures' && <FixturesTab {...ctx} />}
         {active === 'table' && <TableTab {...ctx} />}
         {active === 'bracket' && <BracketTab {...ctx} />}
+        {active === 'stats' && <StatsTab {...ctx} />}
         {active === 'settings' && <SettingsTab {...ctx} />}
       </ScrollView>
     </View>
@@ -116,4 +146,5 @@ const styles = StyleSheet.create({
   tabActive: { backgroundColor: colors.ink },
   tabText: { fontSize: 15, fontWeight: '600', color: colors.muted },
   tabTextActive: { color: colors.accent },
+  share: { color: colors.primary, fontSize: 16, fontWeight: '700' },
 });

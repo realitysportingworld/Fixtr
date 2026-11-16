@@ -37,6 +37,13 @@ class Api:
     def teams(self, cid: str) -> list[dict]:
         return ok(self.c.get(f"{API}/{cid}/teams/"))
 
+    # Squads
+    def add_player(self, cid: str, tid: str, name: str, number: int | None = None):
+        return self.c.post(f"{API}/{cid}/teams/{tid}/players/", json={"name": name, "shirt_number": number})
+
+    def players(self, cid: str, tid: str) -> list[dict]:
+        return ok(self.c.get(f"{API}/{cid}/teams/{tid}/players/"))
+
     # Fixtures
     def generate(self, cid: str) -> list[dict]:
         return ok(self.c.post(f"{API}/{cid}/fixtures/generate"), 201)
@@ -51,10 +58,13 @@ class Api:
         return self.c.patch(f"{API}/{cid}/fixtures/schedule", json=items)
 
     # Results
-    def result(self, cid: str, fid: str, home: int, away: int, tiebreak: str | None = None, method: str = "post"):
+    def result(self, cid: str, fid: str, home: int, away: int, tiebreak: str | None = None,
+               method: str = "post", events: list[dict] | None = None):
         body = {"home_score": home, "away_score": away}
         if tiebreak:
             body["tiebreak_winner"] = tiebreak
+        if events is not None:
+            body["events"] = events
         return getattr(self.c, method)(f"{API}/{cid}/fixtures/{fid}/result", json=body)
 
     def clear(self, cid: str, fid: str):
@@ -85,3 +95,16 @@ class Api:
 
     def groups(self, cid: str) -> list[dict]:
         return ok(self.c.get(f"{API}/{cid}/groups/"))
+
+    def stats(self, cid: str) -> dict:
+        return ok(self.c.get(f"{API}/{cid}/stats/"))
+
+    def events(self, cid: str, fid: str) -> list[dict]:
+        return ok(self.c.get(f"{API}/{cid}/fixtures/{fid}/events"))
+
+    # Sharing
+    def share(self, cid: str) -> str:
+        return ok(self.c.post(f"{API}/{cid}/share"))["share_url"]
+
+    def unshare(self, cid: str):
+        return self.c.delete(f"{API}/{cid}/share")

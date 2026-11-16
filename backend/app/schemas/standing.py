@@ -1,6 +1,6 @@
 from typing import Optional
 from uuid import UUID
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class StandingResponse(BaseModel):
@@ -17,5 +17,4 @@ class StandingResponse(BaseModel):
     win_pct: float = 0.0       # wins / played
     games_behind: float = 0.0  # behind the table leader, NBA style
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

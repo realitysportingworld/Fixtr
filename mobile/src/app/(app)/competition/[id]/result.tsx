@@ -3,11 +3,12 @@ import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { api } from '@/api/client';
-import type { Fixture } from '@/api/types';
+import type { Fixture, Player } from '@/api/types';
 import { useDateTimePicker } from '@/components/DateTimePicker';
+import { type DraftEvent, draftKey, goalsBySide, MatchEventsEditor, type Squads } from '@/components/MatchEventsEditor';
 import { Button, Card, colors, ErrorBanner, Loading, space } from '@/components/ui';
 import { confirm } from '@/lib/dialogs';
-import { drawsAllowed, formatKickoff } from '@/lib/format';
+import { drawsAllowed, formatKickoff, playerStatsSupported } from '@/lib/format';
 import { errorText } from '@/lib/useLoad';
 
 type Side = 'home' | 'away';
@@ -20,6 +21,7 @@ interface Match {
   label: string;
   scoreLabel: string;
   drawsAllowed: boolean;
+  statsEnabled: boolean; // scorers and cards can be recorded
 }
 
 function ScoreInput({ team, value, onChange }: { team: string; value: number; onChange: (v: number) => void }) {
@@ -84,6 +86,9 @@ export default function ResultScreen() {
   const [kickoff, setKickoff] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<'save' | 'clear' | 'date' | null>(null);
+  // Scorers and cards: null until loaded, so a failed load never wipes them on save
+  const [squads, setSquads] = useState<Squads | null>(null);
+  const [events, setEvents] = useState<DraftEvent[]>([]);
   const { pick, picker } = useDateTimePicker();
 
   useEffect(() => {
@@ -103,6 +108,24 @@ export default function ResultScreen() {
                 (x) => x.leg === 1 && x.round_number === f.round_number && x.bracket_position === f.bracket_position,
               ) ?? null)
             : null;
+        const statsEnabled = playerStatsSupported(competition) && !f.is_bye && f.away_team_id != null;
+        if (statsEnabled) {
+          const [home, away, recorded] = await Promise.all([
+            api.listPlayers(id, f.home_team_id),
+            api.listPlayers(id, f.away_team_id!),
+            f.home_score != null ? api.matchEvents(id, fixtureId) : Promise.resolve([]),
+          ]);
+          setSquads({ home, away });
+          setEvents(
+            recorded.map((e) => ({
+              key: draftKey(),
+              type: e.type,
+              player_id: e.player_id,
+              assist_player_id: e.assist_player_id,
+              minute: e.minute,
+            })),
+          );
+        }
         setMatch({
           fixture: f,
           firstLeg,
@@ -111,6 +134,7 @@ export default function ResultScreen() {
           label: [f.knockout_round ?? `Round ${f.round_number}`, f.leg ? `Leg ${f.leg}` : null].filter(Boolean).join(' · '),
           scoreLabel: competition.scoring_config?.score_label ?? 'Score',
           drawsAllowed: drawsAllowed(competition),
+          statsEnabled,
         });
         setKickoff(f.scheduled_at);
         setHome(f.home_score ?? 0);
@@ -142,6 +166,23 @@ export default function ResultScreen() {
   const level = aggregate ? aggregate.home === aggregate.away : home === away;
   const needsTiebreak = decidesTie && level;
   const drawBlocked = !knockout && !match.drawsAllowed && home === away;
+  const sideOf = (playerId: string) =>
+    squads?.home.some((p) => p.id === playerId) ? 'home' : squads?.away.some((p) => p.id === playerId) ? 'away' : undefined;
+  const named = goalsBySide(events, sideOf);
+  const tooManyGoals = named.home > home || named.away > away;
+
+  async function createPlayer(side: 'home' | 'away', playerName: string): Promise<Player | null> {
+    const teamId = side === 'home' ? fixture.home_team_id : fixture.away_team_id;
+    if (!teamId) return null;
+    try {
+      const player = await api.addPlayer(id, teamId, { name: playerName, shirt_number: null });
+      setSquads((s) => (s ? { ...s, [side]: [...s[side], player] } : s));
+      return player;
+    } catch (e) {
+      setError(errorText(e));
+      return null;
+    }
+  }
 
   async function setDate(at: Date | null) {
     setBusy('date');
@@ -164,6 +205,7 @@ export default function ResultScreen() {
   async function clearResult() {
     const message =
       'The match goes back to unplayed and the table updates.' +
+      (events.length ? ' Its scorers and cards are removed too.' : '') +
       (knockout ? ' If the winner was already drawn into the next round, that match is removed until this one is played again.' : '');
     if (!(await confirm('Clear this result?', message, 'Clear result', true))) return;
     setBusy('clear');
@@ -186,6 +228,7 @@ export default function ResultScreen() {
         fixtureId,
         { home, away, tiebreakWinner: needsTiebreak ? tiebreak : null },
         played,
+        squads ? events.map(({ key: _key, ...e }) => e) : undefined,
       );
       router.back();
     } catch (e) {
@@ -237,12 +280,23 @@ export default function ResultScreen() {
       />
       {needsTiebreak && <TiebreakPicker match={match} value={tiebreak} onChange={setTiebreak} />}
       {drawBlocked && <Text style={styles.hint}>Draws aren't allowed — enter the final score after overtime.</Text>}
+      {match.statsEnabled && squads && (
+        <MatchEventsEditor
+          teams={{ home: match.home, away: match.away }}
+          score={{ home, away }}
+          squads={squads}
+          events={events}
+          onChange={setEvents}
+          onCreatePlayer={createPlayer}
+          disabled={busy !== null}
+        />
+      )}
       <ErrorBanner message={error} />
       <Button
         title={played ? 'Update result' : 'Save result'}
         onPress={save}
         loading={busy === 'save'}
-        disabled={busy !== null || drawBlocked || (needsTiebreak && !tiebreak)}
+        disabled={busy !== null || drawBlocked || (needsTiebreak && !tiebreak) || tooManyGoals}
       />
       {played && (
         <Button title="Clear result" variant="danger" onPress={clearResult} loading={busy === 'clear'} disabled={busy !== null} />

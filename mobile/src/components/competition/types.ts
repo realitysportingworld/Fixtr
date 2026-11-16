@@ -1,4 +1,4 @@
-import type { Competition, Fixture, Group, StandingRow, Team } from '@/api/types';
+import type { Competition, CompetitionStats, Fixture, Group, StandingRow, Team } from '@/api/types';
 
 export interface CompetitionData {
   competition: Competition;
@@ -6,6 +6,7 @@ export interface CompetitionData {
   fixtures: Fixture[];
   standings: StandingRow[]; // league and league_phase
   groups: Group[]; // group_knockout only
+  stats: CompetitionStats | null; // sports with player stats only
   readOnly: boolean; // viewing someone else's public competition
 }
 

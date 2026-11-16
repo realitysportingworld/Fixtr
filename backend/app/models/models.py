@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     Boolean, Column, DateTime, Enum, ForeignKey,
@@ -10,6 +10,11 @@ from sqlalchemy.orm import relationship
 import enum
 
 from app.db.base import Base
+
+
+def utcnow() -> datetime:
+    """Current time as naive UTC, the convention for every DateTime column here."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 # ---------------------------------------------------------------------------
@@ -39,6 +44,13 @@ class CompetitionStatus(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
+class MatchEventType(str, enum.Enum):
+    GOAL = "goal"
+    OWN_GOAL = "own_goal"            # credited to the other side
+    YELLOW_CARD = "yellow_card"
+    RED_CARD = "red_card"
+
+
 class FixtureStatus(str, enum.Enum):
     SCHEDULED = "scheduled"
     IN_PROGRESS = "in_progress"
@@ -59,7 +71,7 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     is_active = Column(Boolean, default=True)
     is_premium = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     competitions = relationship("Competition", back_populates="owner")
 
@@ -90,9 +102,13 @@ class Competition(Base):
     # Public competitions can be found and viewed (read-only) by other users
     is_public = Column(Boolean, nullable=False, default=False, server_default=false())
 
+    # Unguessable code for the read-only web page at /c/{share_code}, which
+    # works without an account. Null = link sharing off; a new code revokes the old link.
+    share_code = Column(String(32), nullable=True, unique=True, index=True)
+
     max_participants = Column(Integer, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
     owner = relationship("User", back_populates="competitions")
     teams = relationship("Team", back_populates="competition", cascade="all, delete-orphan")
@@ -111,7 +127,7 @@ class Team(Base):
     competition_id = Column(UUID(as_uuid=True), ForeignKey("competitions.id"), nullable=False)
     name = Column(String, nullable=False)
     group_id = Column(UUID(as_uuid=True), ForeignKey("groups.id"), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     __table_args__ = (
         UniqueConstraint("competition_id", "name", name="uq_team_name_per_competition"),
@@ -119,6 +135,7 @@ class Team(Base):
 
     competition = relationship("Competition", back_populates="teams")
     group = relationship("Group", back_populates="teams")
+    players = relationship("Player", back_populates="team", cascade="all, delete-orphan")
     home_fixtures = relationship("Fixture", foreign_keys="Fixture.home_team_id", back_populates="home_team")
     away_fixtures = relationship("Fixture", foreign_keys="Fixture.away_team_id", back_populates="away_team")
 
@@ -159,13 +176,15 @@ class Fixture(Base):
     # null = a single match.
     leg = Column(Integer, nullable=True)
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     competition = relationship("Competition", back_populates="fixtures")
     group = relationship("Group", back_populates="fixtures")
     home_team = relationship("Team", foreign_keys=[home_team_id], back_populates="home_fixtures")
     away_team = relationship("Team", foreign_keys=[away_team_id], back_populates="away_fixtures")
     result = relationship("Result", back_populates="fixture", uselist=False, cascade="all, delete-orphan")
+    events = relationship("MatchEvent", back_populates="fixture", cascade="all, delete-orphan",
+                          order_by=lambda: (MatchEvent.minute.nulls_last(), MatchEvent.created_at))
 
     @property
     def is_bye(self):
@@ -197,10 +216,50 @@ class Result(Base):
     extra_data = Column(JSON, nullable=True)
 
     winner_id = Column(UUID(as_uuid=True), ForeignKey("teams.id"), nullable=True)  # null = draw
-    recorded_at = Column(DateTime, default=datetime.utcnow)
+    recorded_at = Column(DateTime, default=utcnow)
 
     fixture = relationship("Fixture", back_populates="result")
     winner = relationship("Team")
+
+
+class Player(Base):
+    """A squad member, so goals, assists and cards can be credited to someone."""
+    __tablename__ = "players"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    team_id = Column(UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    shirt_number = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("team_id", "name", name="uq_player_name_per_team"),
+        # NULLs don't collide, so players without a number are fine
+        UniqueConstraint("team_id", "shirt_number", name="uq_player_number_per_team"),
+    )
+
+    team = relationship("Team", back_populates="players")
+
+
+class MatchEvent(Base):
+    """
+    Something a player did in a match: a goal (optionally with an assist), an
+    own goal, or a card. Only played matches have events; clearing the result
+    removes them.
+    """
+    __tablename__ = "match_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    fixture_id = Column(UUID(as_uuid=True), ForeignKey("fixtures.id", ondelete="CASCADE"), nullable=False, index=True)
+    type = Column(Enum(MatchEventType), nullable=False)
+    player_id = Column(UUID(as_uuid=True), ForeignKey("players.id"), nullable=False, index=True)
+    assist_player_id = Column(UUID(as_uuid=True), ForeignKey("players.id"), nullable=True, index=True)
+    minute = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+
+    fixture = relationship("Fixture", back_populates="events")
+    player = relationship("Player", foreign_keys=[player_id])
+    assist_player = relationship("Player", foreign_keys=[assist_player_id])
 
 
 class Standing(Base):
