@@ -18,12 +18,14 @@ COPY backend/ .
 RUN useradd --create-home --uid 10001 app && chown -R app /app
 USER app
 
+# Hosts like Render set PORT; 8000 everywhere else
+ENV PORT=8000
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD python -c "import sys, urllib.request; sys.exit(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status != 200)"
+  CMD python -c "import os, sys, urllib.request; sys.exit(urllib.request.urlopen('http://127.0.0.1:%s/health' % os.environ['PORT'], timeout=4).status != 200)"
 
 # Apply migrations, then serve. --proxy-headers trusts X-Forwarded-For from the
 # reverse proxy so rate limits see real client IPs; only safe because the API
 # port is reachable through the proxy alone (see docker-compose.prod.yml).
-CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${WEB_CONCURRENCY:-2} --proxy-headers --forwarded-allow-ips='*'"]
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --workers ${WEB_CONCURRENCY:-2} --proxy-headers --forwarded-allow-ips='*'"]
