@@ -17,7 +17,7 @@ export default function AppLayout() {
         contentStyle: { backgroundColor: colors.bg },
       }}
     >
-      <Stack.Screen name="index" options={{ title: 'Competitions' }} />
+      <Stack.Screen name="index" options={{ title: 'Competitions', headerShown: false }} />
       <Stack.Screen name="new" options={{ title: 'New competition', presentation: 'modal' }} />
       <Stack.Screen name="search" options={{ title: 'Find competitions' }} />
       <Stack.Screen name="account" options={{ title: 'Account' }} />
