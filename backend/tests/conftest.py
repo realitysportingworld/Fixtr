@@ -8,7 +8,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
-_DB_FILE = Path(tempfile.mkdtemp(prefix="compapp-tests-")) / "test.db"
+_DB_FILE = Path(tempfile.mkdtemp(prefix="fixtr-tests-")) / "test.db"
 os.environ["DATABASE_URL"] = f"sqlite:///{_DB_FILE.as_posix()}"
 os.environ["SECRET_KEY"] = "t" * 64
 os.environ["CORS_ORIGINS"] = '["http://localhost:8081"]'

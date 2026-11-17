@@ -13,7 +13,7 @@ from email.message import EmailMessage
 
 from app.core.config import settings
 
-logger = logging.getLogger("compapp.email")
+logger = logging.getLogger("fixtr.email")
 
 # Tests read what would have been sent from here
 outbox: list[EmailMessage] = []

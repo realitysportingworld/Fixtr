@@ -1,5 +1,5 @@
-# CompApp API. Build from the repository root (requirements.txt lives there):
-#   docker build -f backend/Dockerfile -t compapp-api .
+# Fixtr API. Build from the repository root (requirements.txt lives there):
+#   docker build -f backend/Dockerfile -t fixtr-api .
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

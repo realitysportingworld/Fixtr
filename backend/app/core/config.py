@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env")
 
-    APP_NAME: str = "CompApp API"
+    APP_NAME: str = "Fixtr API"
     DEBUG: bool = False
 
     DATABASE_URL: str
@@ -25,7 +25,7 @@ class Settings(BaseSettings):
 
     # Email: "console" logs messages (development); "smtp" sends them
     EMAIL_BACKEND: Literal["console", "smtp"] = "console"
-    EMAIL_FROM: str = "CompApp <no-reply@localhost>"
+    EMAIL_FROM: str = "Fixtr <no-reply@localhost>"
     SMTP_HOST: str | None = None
     SMTP_PORT: int = 587
     SMTP_USERNAME: str | None = None
@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[str] = []
 
     # Public address of this server, used to build share links (e.g.
-    # https://compapp.example.com). Unset = the address the request came in on,
+    # https://fixtr.example.com). Unset = the address the request came in on,
     # which on a phone in development is the dev machine's LAN IP.
     PUBLIC_BASE_URL: str | None = None
 

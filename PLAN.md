@@ -1,4 +1,4 @@
-# CompApp — MVP Phase & Implementation Plan
+# Fixtr — MVP Phase & Implementation Plan
 
 ---
 

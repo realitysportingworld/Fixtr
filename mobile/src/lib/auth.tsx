@@ -6,6 +6,7 @@ import {
 } from '@/api/client';
 import type { TokenResponse, User } from '@/api/types';
 
+// Storage keys predate the Fixtr name; kept so nobody is signed out
 const TOKENS_KEY = 'compapp.session';
 const LEGACY_TOKEN_KEY = 'compapp.token'; // single 24-hour token, before refresh tokens
 

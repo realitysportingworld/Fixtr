@@ -11,7 +11,7 @@ from app.core.config import settings
 from app.db.base import engine
 from app.web.share import router as share_router
 
-logger = logging.getLogger("compapp")
+logger = logging.getLogger("fixtr")
 
 if not settings.DEBUG and settings.EMAIL_BACKEND == "console":
     logger.warning("EMAIL_BACKEND is 'console': password reset emails are only logged, not sent")

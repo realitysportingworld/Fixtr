@@ -210,9 +210,9 @@ def forgot_password(
     background.add_task(
         send_email,
         user.email,
-        f"Your CompApp code: {code}",
+        f"Your Fixtr code: {code}",
         f"Hi {user.username},\n\n"
-        f"Your code to reset your CompApp password is:\n\n    {code}\n\n"
+        f"Your code to reset your Fixtr password is:\n\n    {code}\n\n"
         f"It works once and expires in {minutes} minutes.\n\n"
         "If you didn't ask for this, ignore this email. Your password hasn't changed.\n",
     )

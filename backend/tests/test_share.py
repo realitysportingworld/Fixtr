@@ -29,8 +29,8 @@ def test_link_is_off_until_turned_on(api, league):
 
 def test_public_base_url_setting(api, league, monkeypatch):
     from app.core.config import settings
-    monkeypatch.setattr(settings, "PUBLIC_BASE_URL", "https://compapp.example.com/")
-    assert api.share(league).startswith("https://compapp.example.com/c/")
+    monkeypatch.setattr(settings, "PUBLIC_BASE_URL", "https://fixtr.example.com/")
+    assert api.share(league).startswith("https://fixtr.example.com/c/")
 
 
 def test_page_opens_without_an_account(api, anon, league):
